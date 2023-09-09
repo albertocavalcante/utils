@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 [ "$EUID" -eq 0 ] || exec sudo "$0" "$@"
 export GRADLE_VERSION=7.6
 export GRADLE_DISTRIBUTION=all
