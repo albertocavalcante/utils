@@ -3,6 +3,7 @@
 - [Bazel](./bazel/)
 - [Fish Shell](./fish-shell/)
 - [GitHub CLI](./github-cli/)
+- [Go](./go/)
 - [Gradle](./gradle/)
 - [Python](./python/)
 
