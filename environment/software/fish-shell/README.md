@@ -1,5 +1,19 @@
 # Fish Shell
 
+## Installation
+
+- [Installation](https://fishshell.com/docs/current/index.html#id1)
+
+### Ubuntu
+
+```sh
+sudo apt-add-repository ppa:fish-shell/release-3
+sudo apt update
+sudo apt install fish
+```
+
+**Source:** *https://launchpad.net/~fish-shell/+archive/ubuntu/release-3*
+
 ## Configuration
 
 ### Edit
