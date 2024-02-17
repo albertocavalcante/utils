@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-GOVERSION=1.21.3
+GOVERSION=1.22.0
 GOOS=linux
 GOARCH=amd64
 
