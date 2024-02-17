@@ -18,6 +18,3 @@ mv go go-$SHORTVERSION
 sudo mv go-$SHORTVERSION /usr/local
 
 popd
-
-
-
