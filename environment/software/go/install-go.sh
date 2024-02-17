@@ -12,8 +12,10 @@ pushd $TMPDIR
 
 wget https://go.dev/dl/$GOTARGZ
 tar -xvf $GOTARGZ
-mv go go-$VERSION
-sudo mv go-$VERSION /usr/local
+
+SHORTVERSION=$(echo $GOVERSION | cut -d'.' -f1,2)
+mv go go-$SHORTVERSION
+sudo mv go-$SHORTVERSION /usr/local
 
 popd
 
