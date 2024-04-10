@@ -5,6 +5,7 @@
 - [GitHub CLI](./github-cli/)
 - [Go](./go/)
 - [Gradle](./gradle/)
+- [jq](./jq/)
 - [Python](./python/)
 
 
@@ -13,4 +14,3 @@
 ```sh
 vim ~/.config/fish/config.fish
 ```
-
