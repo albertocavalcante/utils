@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 
+if [ "$EUID" -ne 0 ]; then
+  echo "This script must be executed with sudo."
+  exec sudo "$0" "$@"
+fi
+
 GOVERSION=1.22.4
 GOOS=linux
 GOARCH=amd64
