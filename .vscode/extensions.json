@@ -2,5 +2,6 @@
     "recommendations": [
         "GitHub.copilot",
         "GitHub.copilot-chat",
+        "editorconfig.editorconfig",
     ]
 }
