@@ -13,6 +13,12 @@ TMPDIR=$(mktemp -d)
 
 GOTARGZ=go$GOVERSION.$GOOS-$GOARCH.tar.gz
 
+cleanup() {
+  rm -rf $TMPDIR
+}
+
+trap cleanup EXIT
+
 pushd $TMPDIR
 
 wget https://go.dev/dl/$GOTARGZ
