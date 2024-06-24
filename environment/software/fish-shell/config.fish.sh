@@ -13,7 +13,7 @@ source $HOME/.asdf/asdf.fish
 
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 
-export GOROOT=/usr/local/go-1.21
+export GOROOT=/usr/local/go-1.22
 export GOPATH=$HOME/projects/go
 export GOBIN=$GOPATH/bin
 
