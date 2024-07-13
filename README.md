@@ -1,7 +1,7 @@
 # Utils
 
 - [Docs](./docs)
-- [Environment](./environment/)
+- [Environment](./environment)
 - [Prompts](./prompts)
+- [Snippets](./snippets)
 - [Study Guide](./study-guide)
-
