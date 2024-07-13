@@ -15,3 +15,9 @@ ms-settings:about
 ```txt
 ms-settings:developers
 ```
+
+### Windows Update
+
+```txt
+ms-settings:windowsupdate
+```
