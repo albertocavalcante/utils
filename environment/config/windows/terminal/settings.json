@@ -86,6 +86,18 @@
                     "face": "Lucida Console",
                     "size": 9
                 }
+            },
+            {
+                "guid": "{71160544-14d8-4194-af25-d05feeac7233}",
+                "name": "MSYS / MSYS2",
+                "commandline": "C:/msys64/msys2_shell.cmd -defterm -here -no-start -msys",
+                "startingDirectory": "C:/msys64/home/%USERNAME%",
+                "icon": "C:/msys64/msys2.ico",
+                "font": 
+                {
+                  "face": "Lucida Console",
+                  "size": 9
+                }
             }
         ]
     },
