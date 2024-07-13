@@ -1,10 +1,17 @@
 # Windows
 
-- [About](ms-settings:about?activationSource=SMC-Article-13443)
+## Settings Hyperlinks
 
-Enabling developer settings:
+You must copy and paste these direct references in a new browser tab (href is not working 😔).
 
-- <a href="ms-settings:developers">Settings for Developers</a>
+### About
 
+```txt
+ms-settings:about
+```
 
-<a href="ms-settings:about?activationSource=SMC-Article-13443" target="_blank" role="button" class="ocpExternalLink supLinkButton" data-bi-type="anchor">Open About settings</a>
+### Developer Settings
+
+```txt
+ms-settings:developers
+```
