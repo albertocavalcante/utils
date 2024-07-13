@@ -1,1 +1,5 @@
 * text=auto eol=lf
+
+# https://serverfault.com/questions/429594/is-it-safe-to-write-batch-files-with-unix-line-endings
+*.bat text eol=crlf
+*.cmd text eol=crlf
