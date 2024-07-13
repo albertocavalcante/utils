@@ -4,4 +4,4 @@
 
 Enabling developer settings:
 
-- [Settings for Developers](ms-settings:developers)
+- <a href="ms-settings:developers">Settings for Developers</a>
