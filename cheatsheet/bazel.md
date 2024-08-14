@@ -1,5 +1,11 @@
 # Bazel
 
+## Info
+
+```sh
+bazel info output_base
+```
+
 ## Bzlmod
 
 ```sh
