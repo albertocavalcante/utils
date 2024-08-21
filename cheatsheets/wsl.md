@@ -15,3 +15,8 @@ wsl --list
 ```
 
 **Source:** [How to locate the .vhdx file and disk path for your Linux distribution](https://learn.microsoft.com/en-us/windows/wsl/disk-space#how-to-locate-the-vhdx-file-and-disk-path-for-your-linux-distribution)
+
+## Reference
+
+- [How to Shrink a WSL2 Virtual Disk](https://stephenreescarter.net/how-to-shrink-a-wsl2-virtual-disk/)
+- [Automatic Backups for WSL2](https://stephenreescarter.net/automatic-backups-for-wsl2/)
