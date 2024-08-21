@@ -1,4 +1,4 @@
-# Cheatsheet
+# Cheatsheets
 
 - [Bazel](./bazel.md)
 - [Git](./git.md)

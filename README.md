@@ -1,5 +1,6 @@
 # Utils
 
+- [Cheatsheets](./cheatsheets)
 - [Docs](./docs)
 - [Environment](./environment)
 - [Prompts](./prompts)
