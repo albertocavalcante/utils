@@ -14,3 +14,7 @@ On my machine using WinGet did not work with the message `Installation space req
 ```
 
 **Note:** I invoked without the arguments.
+
+
+https://packages.msys2.org/package/mingw-w64-x86_64-gcc
+https://packages.msys2.org/package/mingw-w64-x86_64-dlfcn
