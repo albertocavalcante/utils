@@ -29,6 +29,11 @@ uv run github_tag_filter.py tensorflow/tensorflow -f "2.*"
 # Apply multiple filters
 uv run github_tag_filter.py bazelbuild/bazel -f "5.*" -f ">5.4.1"
 
-# Hide tarball URLs in output
+# Hide URLs in output
 uv run github_tag_filter.py bazelbuild/bazel --no-urls
+
+# Show tarball URLs instead of release URLs
+uv run github_tag_filter.py bazelbuild/bazel --tarball
 ```
+
+By default, the script shows GitHub release URLs. Use the `--no-urls` flag to hide URLs completely, or the `--tarball` flag to show tarball URLs instead of release URLs.

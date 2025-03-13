@@ -82,6 +82,15 @@ class GitHubTag(BaseModel):
     commit: GitHubCommit
     zipball_url: str
     tarball_url: str
+    
+    @property
+    def release_url(self) -> str:
+        """Generate the GitHub release URL for this tag"""
+        # Extract owner/repo from tarball_url
+        # Format: https://api.github.com/repos/OWNER/REPO/tarball/TAG
+        parts = self.tarball_url.split('/')
+        owner, repo = parts[4], parts[5]
+        return f"https://github.com/{owner}/{repo}/releases/tag/{self.name}"
 
 class FilterResult(BaseModel):
     filter_name: str
@@ -234,6 +243,7 @@ class AppConfig(BaseModel):
     repo: str
     filters: List[str] = Field(default_factory=list)
     show_urls: bool = True
+    show_tarball: bool = False
     
     @field_validator('repo')
     @classmethod
@@ -249,8 +259,9 @@ class AppConfig(BaseModel):
 @click.command()
 @click.argument('repo', required=True)
 @click.option('--filters', '-f', multiple=True, help='Version filters (e.g., "5.*", ">5.4.1", "5.0.0-6.0.0")')
-@click.option('--show-urls/--no-urls', default=True, help='Show/hide tarball URLs in output')
-def main(repo: str, filters: List[str], show_urls: bool) -> None:
+@click.option('--show-urls/--no-urls', default=True, help='Show/hide URLs in output')
+@click.option('--tarball/--no-tarball', default=False, help='Show tarball URLs instead of release URLs')
+def main(repo: str, filters: List[str], show_urls: bool, tarball: bool) -> None:
     """
     Filter GitHub repository tags based on version patterns.
     
@@ -260,7 +271,7 @@ def main(repo: str, filters: List[str], show_urls: bool) -> None:
     
     try:
         # Validate inputs using Pydantic
-        config = AppConfig(repo=repo, filters=filters, show_urls=show_urls)
+        config = AppConfig(repo=repo, filters=filters, show_urls=show_urls, show_tarball=tarball)
         repo_owner, repo_name = config.get_repo_parts()
     except ValueError as e:
         console.print(f"[bold red]Error:[/bold red] {str(e)}")
@@ -303,7 +314,7 @@ def main(repo: str, filters: List[str], show_urls: bool) -> None:
         table.add_column("Tag")
         table.add_column("Commit SHA")
         if config.show_urls:
-            table.add_column("Tarball URL")
+            table.add_column("URL")
         
         for tag in tags:
             row = [
@@ -311,7 +322,7 @@ def main(repo: str, filters: List[str], show_urls: bool) -> None:
                 tag.commit.sha[:7],
             ]
             if config.show_urls:
-                row.append(tag.tarball_url)
+                row.append(tag.tarball_url if config.show_tarball else tag.release_url)
             table.add_row(*row)
         
         console.print(table)
