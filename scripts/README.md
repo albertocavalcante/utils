@@ -4,12 +4,31 @@ This directory contains utility scripts for various tasks.
 
 ## Available Scripts
 
-### bazel_tag_filter.py
+### github_tag_filter.py
 
-A utility script to fetch and filter Bazel release tags from GitHub. It allows filtering tags by version patterns and displays results in a formatted table.
+A utility script to fetch and filter tags from any GitHub repository. It allows filtering tags by version patterns and displays results in a formatted table.
 
 To run using uv:
 
 ```bash
-uv run bazel_tag_filter.py
+# Basic usage
+uv run github_tag_filter.py owner/repo
+
+# Examples:
+uv run github_tag_filter.py bazelbuild/bazel
+uv run github_tag_filter.py tensorflow/tensorflow -f "2.*"
+
+# Filter options:
+# - "X.*" : Match major version X
+# - ">X.Y.Z" : Greater than version X.Y.Z
+# - "<X.Y.Z" : Less than version X.Y.Z
+# - ">=X.Y.Z" : Greater than or equal to version X.Y.Z
+# - "<=X.Y.Z" : Less than or equal to version X.Y.Z
+# - "X.Y.Z-A.B.C" : Range between X.Y.Z and A.B.C (inclusive)
+
+# Apply multiple filters
+uv run github_tag_filter.py bazelbuild/bazel -f "5.*" -f ">5.4.1"
+
+# Hide tarball URLs in output
+uv run github_tag_filter.py bazelbuild/bazel --no-urls
 ```
