@@ -6,23 +6,88 @@
 #   "packaging",
 #   "rich",
 #   "click",
+#   "pydantic",
 # ]
 # ///
 
+# type: ignore[import]
 from typing import List, Dict, Any, Optional, Callable
 import requests
 from packaging import version
 from rich.console import Console
 from rich.table import Table
 import click
-from dataclasses import dataclass
+from pydantic import BaseModel, Field, field_validator
+from enum import Enum
 
-@dataclass
-class VersionFilter:
+class VersionFilterType(str, Enum):
+    MAJOR_VERSION = "major_version"
+    GREATER_THAN = "greater_than"
+    LESS_THAN = "less_than"
+    GREATER_EQUAL = "greater_equal"
+    LESS_EQUAL = "less_equal"
+    EXACT = "exact"
+    RANGE = "range"
+    ALL = "all"
+
+class VersionFilter(BaseModel):
     name: str
-    filter_func: Callable[[version.Version], bool]
+    filter_type: VersionFilterType
+    version_value: str
+    end_version: Optional[str] = None
+    
+    def get_filter_function(self) -> Callable[[version.Version], bool]:
+        """Generate the filter function based on the filter type and version values"""
+        if self.filter_type == VersionFilterType.ALL:
+            return lambda v: True
+            
+        if self.filter_type == VersionFilterType.MAJOR_VERSION:
+            major = int(self.version_value)
+            return lambda v: v.major == major
+            
+        elif self.filter_type == VersionFilterType.RANGE:
+            start_ver = version.parse(self.version_value)
+            end_ver = version.parse(self.end_version)
+            return lambda v: start_ver <= v <= end_ver
+            
+        elif self.filter_type == VersionFilterType.GREATER_THAN:
+            ver = version.parse(self.version_value)
+            return lambda v: v > ver
+            
+        elif self.filter_type == VersionFilterType.LESS_THAN:
+            ver = version.parse(self.version_value)
+            return lambda v: v < ver
+            
+        elif self.filter_type == VersionFilterType.GREATER_EQUAL:
+            ver = version.parse(self.version_value)
+            return lambda v: v >= ver
+            
+        elif self.filter_type == VersionFilterType.LESS_EQUAL:
+            ver = version.parse(self.version_value)
+            return lambda v: v <= ver
+            
+        elif self.filter_type == VersionFilterType.EXACT:
+            ver = version.parse(self.version_value)
+            return lambda v: v == ver
+            
+        # Default case
+        return lambda v: True
 
-def fetch_github_tags(repo_owner: str, repo_name: str) -> List[Dict[str, Any]]:
+class GitHubCommit(BaseModel):
+    sha: str
+    url: str
+
+class GitHubTag(BaseModel):
+    name: str
+    commit: GitHubCommit
+    zipball_url: str
+    tarball_url: str
+
+class FilterResult(BaseModel):
+    filter_name: str
+    tags: List[GitHubTag]
+
+def fetch_github_tags(repo_owner: str, repo_name: str) -> List[GitHubTag]:
     """
     Fetch all tags from a GitHub repository.
     
@@ -31,9 +96,9 @@ def fetch_github_tags(repo_owner: str, repo_name: str) -> List[Dict[str, Any]]:
         repo_name: The name of the repository
         
     Returns:
-        List of tag objects from the GitHub API
+        List of GitHubTag objects
     """
-    tags: List[Dict[str, Any]] = []
+    tags_data: List[Dict[str, Any]] = []
     page = 1
     per_page = 100
     
@@ -48,10 +113,11 @@ def fetch_github_tags(repo_owner: str, repo_name: str) -> List[Dict[str, Any]]:
         if not page_tags:
             break
             
-        tags.extend(page_tags)
+        tags_data.extend(page_tags)
         page += 1
         
-    return tags
+    # Convert raw data to GitHubTag models
+    return [GitHubTag.model_validate(tag) for tag in tags_data]
 
 def parse_version(tag_name: str) -> Optional[version.Version]:
     """
@@ -72,29 +138,30 @@ def parse_version(tag_name: str) -> Optional[version.Version]:
     except (version.InvalidVersion, TypeError):
         return None
 
-def filter_tags_by_patterns(tags: List[Dict[str, Any]], 
-                           filters: List[VersionFilter]) -> Dict[str, List[Dict[str, Any]]]:
+def filter_tags_by_patterns(tags: List[GitHubTag], 
+                           filters: List[VersionFilter]) -> Dict[str, List[GitHubTag]]:
     """
     Filter tags based on version pattern filters.
     
     Args:
-        tags: List of tag objects from the GitHub API
+        tags: List of GitHubTag objects
         filters: List of version filters to apply
         
     Returns:
         Dictionary with filter names as keys and filtered tag lists as values
     """
-    results: Dict[str, List[Dict[str, Any]]] = {}
+    results: Dict[str, List[GitHubTag]] = {}
     
     # Process each tag
     for filter_obj in filters:
         filtered_tags = []
+        filter_func = filter_obj.get_filter_function()
         
         for tag in tags:
-            tag_name = tag["name"]
+            tag_name = tag.name
             parsed_version = parse_version(tag_name)
             
-            if parsed_version and filter_obj.filter_func(parsed_version):
+            if parsed_version and filter_func(parsed_version):
                 filtered_tags.append(tag)
         
         results[filter_obj.name] = filtered_tags
@@ -114,49 +181,70 @@ def create_version_filter(filter_expr: str) -> VersionFilter:
     - "X.Y.Z-A.B.C" : Range between X.Y.Z (inclusive) and A.B.C (inclusive)
     """
     if filter_expr.endswith(".*"):
-        major = int(filter_expr[:-2])
+        major = filter_expr[:-2]
         return VersionFilter(
             name=f"Version {filter_expr}",
-            filter_func=lambda v: v.major == major
+            filter_type=VersionFilterType.MAJOR_VERSION,
+            version_value=major
         )
     elif "-" in filter_expr:
         start, end = filter_expr.split("-")
-        start_ver = version.parse(start)
-        end_ver = version.parse(end)
         return VersionFilter(
             name=f"Version {start} to {end}",
-            filter_func=lambda v: start_ver <= v <= end_ver
+            filter_type=VersionFilterType.RANGE,
+            version_value=start,
+            end_version=end
+        )
+    elif filter_expr.startswith(">="):
+        ver = filter_expr[2:]
+        return VersionFilter(
+            name=f"Version >= {ver}",
+            filter_type=VersionFilterType.GREATER_EQUAL,
+            version_value=ver
         )
     elif filter_expr.startswith(">"):
-        if filter_expr.startswith(">="):
-            ver = version.parse(filter_expr[2:])
-            return VersionFilter(
-                name=f"Version >= {ver}",
-                filter_func=lambda v: v >= ver
-            )
-        ver = version.parse(filter_expr[1:])
+        ver = filter_expr[1:]
         return VersionFilter(
             name=f"Version > {ver}",
-            filter_func=lambda v: v > ver
+            filter_type=VersionFilterType.GREATER_THAN,
+            version_value=ver
+        )
+    elif filter_expr.startswith("<="):
+        ver = filter_expr[2:]
+        return VersionFilter(
+            name=f"Version <= {ver}",
+            filter_type=VersionFilterType.LESS_EQUAL,
+            version_value=ver
         )
     elif filter_expr.startswith("<"):
-        if filter_expr.startswith("<="):
-            ver = version.parse(filter_expr[2:])
-            return VersionFilter(
-                name=f"Version <= {ver}",
-                filter_func=lambda v: v <= ver
-            )
-        ver = version.parse(filter_expr[1:])
+        ver = filter_expr[1:]
         return VersionFilter(
             name=f"Version < {ver}",
-            filter_func=lambda v: v < ver
+            filter_type=VersionFilterType.LESS_THAN,
+            version_value=ver
         )
     else:
-        ver = version.parse(filter_expr)
         return VersionFilter(
-            name=f"Version {ver}",
-            filter_func=lambda v: v == ver
+            name=f"Version {filter_expr}",
+            filter_type=VersionFilterType.EXACT,
+            version_value=filter_expr
         )
+
+class AppConfig(BaseModel):
+    repo: str
+    filters: List[str] = Field(default_factory=list)
+    show_urls: bool = True
+    
+    @field_validator('repo')
+    @classmethod
+    def validate_repo_format(cls, v):
+        if '/' not in v:
+            raise ValueError("Repository must be in format 'owner/name'")
+        return v
+    
+    def get_repo_parts(self) -> tuple[str, str]:
+        owner, name = self.repo.split('/')
+        return owner, name
 
 @click.command()
 @click.argument('repo', required=True)
@@ -168,15 +256,17 @@ def main(repo: str, filters: List[str], show_urls: bool) -> None:
     
     REPO should be in the format "owner/name" (e.g., "bazelbuild/bazel")
     """
+    console = Console()
+    
     try:
-        repo_owner, repo_name = repo.split('/')
-    except ValueError:
-        console = Console()
-        console.print("[bold red]Error:[/bold red] Repository must be in format 'owner/name'")
+        # Validate inputs using Pydantic
+        config = AppConfig(repo=repo, filters=filters, show_urls=show_urls)
+        repo_owner, repo_name = config.get_repo_parts()
+    except ValueError as e:
+        console.print(f"[bold red]Error:[/bold red] {str(e)}")
         return
 
-    console = Console()
-    console.print(f"[bold]Fetching tags from GitHub repository {repo}...[/bold]")
+    console.print(f"[bold]Fetching tags from GitHub repository {config.repo}...[/bold]")
     
     try:
         tags = fetch_github_tags(repo_owner, repo_name)
@@ -187,7 +277,7 @@ def main(repo: str, filters: List[str], show_urls: bool) -> None:
 
     # Create filters from command line arguments
     version_filters = []
-    for filter_expr in filters:
+    for filter_expr in config.filters:
         try:
             version_filters.append(create_version_filter(filter_expr))
         except Exception as e:
@@ -198,7 +288,8 @@ def main(repo: str, filters: List[str], show_urls: bool) -> None:
     if not version_filters:
         version_filters = [VersionFilter(
             name="All versions",
-            filter_func=lambda v: True
+            filter_type=VersionFilterType.ALL,
+            version_value="*"
         )]
 
     # Apply filters
@@ -211,16 +302,16 @@ def main(repo: str, filters: List[str], show_urls: bool) -> None:
         table = Table(show_header=True)
         table.add_column("Tag")
         table.add_column("Commit SHA")
-        if show_urls:
+        if config.show_urls:
             table.add_column("Tarball URL")
         
         for tag in tags:
             row = [
-                tag["name"],
-                tag["commit"]["sha"][:7],
+                tag.name,
+                tag.commit.sha[:7],
             ]
-            if show_urls:
-                row.append(tag["tarball_url"])
+            if config.show_urls:
+                row.append(tag.tarball_url)
             table.add_row(*row)
         
         console.print(table)
