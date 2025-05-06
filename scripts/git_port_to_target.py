@@ -534,31 +534,50 @@ def _open_external_editor(editor: EditorType, worktree_path: Path) -> bool:
 
         # Use shell=True to ensure environment variables, PATH extensions, and aliases are preserved
         if os.name == "nt":  # Windows
-            # On Windows, the command needs special handling for shell=True
+            # On Windows, the best approach is to create a command that maintains shell context
+            # This ensures doskeys/aliases work properly
+
+            # Try direct command first
             cmd_str = f'{editor.command()} "{worktree_path}"'
             console.print(f"[info]Executing command: {cmd_str}[/info]")
-            run_command(cmd_str, check=False, shell=True)
-            # Also try running through 'start' as a backup on Windows
             try:
-                start_cmd = f'start "" {editor.command()} "{worktree_path}"'
+                run_command(cmd_str, check=False, shell=True)
+                editor_opened = True
+            except Exception as e:
+                console.print(f"[yellow]Direct command failed: {e}[/]")
+
+            # If direct command fails, try using a CMD wrapper that preserves shell context
+            if not editor_opened:
                 console.print(
-                    f"[info]Also trying with start command: {start_cmd}[/info]"
+                    "[info]Trying with CMD wrapper for shell context preservation...[/info]"
                 )
-                run_command(start_cmd, check=False, shell=True)
-            except Exception:
-                pass  # Ignore any errors from the fallback approach
+                # Use cmd /c to run a command and preserve shell environment including doskeys
+                # Careful with quoting here - this format avoids complex escaping issues
+                cmd_wrapper = [
+                    "cmd",
+                    "/c",
+                    f'cd /d "{worktree_path}" && {editor.command()} .',
+                ]
+                console.print(f"[info]Executing: {cmd_wrapper}[/info]")
+                try:
+                    run_command(
+                        cmd_wrapper, check=False
+                    )  # No shell=True here since we're using a list
+                    editor_opened = True
+                except Exception as e:
+                    console.print(f"[yellow]CMD wrapper failed: {e}[/]")
+
         else:  # Linux/macOS
             # On Unix systems, running with shell=True preserves environment
             cmd_str = f"{editor.command()} '{worktree_path}'"
             console.print(f"[info]Executing command: {cmd_str}[/info]")
             run_command(cmd_str, check=False, shell=True)
-
-        # For improved robustness, we'll assume it worked in most cases
-        editor_opened = True
+            editor_opened = True
 
         console.print(
-            f"[green]{SUCCESS_SYMBOL} {editor.display_name()} opened. Resolve conflicts and then continue.[/]"
+            f"[green]{SUCCESS_SYMBOL} Attempted to open {editor.display_name()}. Resolve conflicts and then continue.[/]"
         )
+        # Always return True to prevent worktree deletion, even if opening fails
         return True
 
     except Exception as e:
@@ -570,9 +589,12 @@ def _open_external_editor(editor: EditorType, worktree_path: Path) -> bool:
         # Display help for terminal command issues
         if os.name == "nt":
             console.print(
-                f"[bold yellow]Note:[/] If you use an alias or doskey for {editor.command()}, try:\n"
+                f"[bold yellow]Note:[/] Since you may be using a doskey/alias for {editor.command()}, try:\n"
                 f"  1. Open cmd.exe and run: [cyan]cd /d {worktree_path} && {editor.command()} .[/]\n"
-                f'  2. Or use the full path: [cyan]"C:\\path\\to\\{editor.command()}.exe" "{worktree_path}"[/]'
+                f"  2. Or create a batch file (editor.bat) with these lines:\n"
+                f"     [cyan]@echo off[/]\n"
+                f'     [cyan]cd /d "{worktree_path}"[/]\n'
+                f"     [cyan]{editor.command()} .[/]"
             )
         else:
             console.print(
