@@ -159,7 +159,7 @@ def get_commits_for_patch(
             # However, keeping it for robustness if a direct ref somehow gets through and is empty against target.
             if ".." not in diff_range_or_ref:  # If it was unexpectedly a single ref
                 console.print(
-                    f"[yellow]Warning:[/] No commits found with range '{commit_range_for_log}'. Trying source branch '{diff_range_or_ref}' directly against its own history for context (this might list more commits if target is behind or unrelated).[/yellow]"
+                    f"[yellow]Warning:[/] No commits found with range '{commit_range_for_log}'. Trying source branch '{diff_range_or_ref}' directly against its own history relative to '{target_branch_for_fallback}'.[/yellow]"
                 )
                 # This specific fallback might need re-evaluation if 'target_branch_for_fallback' is always the port target.
                 commit_output_fallback = run_command(
@@ -181,14 +181,17 @@ def get_commits_for_patch(
                         f"[yellow]Warning:[/] No unique commits found for source '{diff_range_or_ref}' relative to '{target_branch_for_fallback}'. The source might be behind or at the same point as the target, or it's an empty branch."
                     )
                     return []
-            else:  # It was a specific range A..B and it's empty
+            else:
                 console.print(
                     f"[yellow]Warning:[/] No commits found for the specified range '{diff_range_or_ref}'. Ensure the range is correct and contains commits."
                 )
                 return []
         return commit_output.split("\n")
     except ShellCommandError as e:
-        if "unknown revision or path not in the working tree" in str(e.stderr).lower():
+        if (
+            e.stderr
+            and "unknown revision or path not in the working tree" in e.stderr.lower()
+        ):
             console.print(
                 f"[bold yellow]Warning:[/] Could not find commits. Effective source range '{diff_range_or_ref}' or target '{target_branch_for_fallback}' might be invalid or have no diff."
             )
@@ -202,20 +205,19 @@ class PatchApplyStatus(Enum):
     APPLIED_CLEANLY = "APPLIED_CLEANLY"
     USER_WILL_RESOLVE = "USER_WILL_RESOLVE"
     ABORTED_CONFLICT = "ABORTED_CONFLICT"
+    NO_CHANGES = "NO_CHANGES"
 
 
 # --- Refactored Helper Functions for apply command ---
 def _resolve_source_branch(source_arg: str | None, repo_root: Path) -> str:
-    """Resolves the source branch/commit. Defaults to current branch if source_arg is None."""
     if source_arg:
         console.print(f"[info]Using specified source: '{source_arg}'[/info]")
         return source_arg
-    else:
-        current_branch_val = get_current_branch(repo_root)
-        console.print(
-            f"[info]No source specified, using current branch: '{current_branch_val}'[/info]"
-        )
-        return current_branch_val
+    current_branch_val = get_current_branch(repo_root)
+    console.print(
+        f"[info]No source specified, using current branch: '{current_branch_val}'[/info]"
+    )
+    return current_branch_val
 
 
 def _display_initial_info(
@@ -238,9 +240,8 @@ def _display_initial_info(
 
 def _create_patch_file(
     effective_diff_source: str, patch_file_path: Path, repo_root: Path
-):
-    """Creates a patch file using the effective diff source (which might be a range like base..source)."""
-    # effective_diff_source is already the calculated range (e.g. base..source or user_A..user_B)
+) -> bool:
+    """Creates a patch file. Returns True if patch has content, False if empty."""
     console.print(
         f"[info]Creating patch file for effective diff source: '{effective_diff_source}'...[/info]"
     )
@@ -248,7 +249,13 @@ def _create_patch_file(
         ["git", "diff", effective_diff_source, "--output", str(patch_file_path)],
         cwd=repo_root,
     )
+    if patch_file_path.stat().st_size == 0:
+        console.print(
+            f"[yellow]Patch file created at: {patch_file_path} is empty. No textual changes detected.[/]"
+        )
+        return False
     console.print(f"[info]Patch file created at: {patch_file_path}[/info]")
+    return True
 
 
 def _setup_worktree(
@@ -279,7 +286,14 @@ def _setup_worktree(
             raise typer.Exit(code=1)
 
     run_command(
-        ["git", "worktree", "add", "-f", str(worktree_path), target_branch],
+        [
+            "git",
+            "worktree",
+            "add",
+            "--force",
+            str(worktree_path),
+            target_branch,
+        ],  # --force for git's tracking
         cwd=repo_root,
     )
 
@@ -306,7 +320,6 @@ def _commit_and_push_changes(
     run_command(["git", "push", "origin", new_branch_in_worktree], cwd=worktree_path)
 
 
-# --- Refactored Helper Functions for apply command (Part 2) ---
 def _apply_patch_and_handle_conflicts(
     patch_file_path: Path,
     worktree_path: Path,
@@ -343,8 +356,7 @@ def _apply_patch_and_handle_conflicts(
             choices=["1", "2", "3"],
             default="3",
         )
-
-        guidance_message_after_conflict = (
+        guidance_message = (
             f"Please navigate to [cyan]{worktree_path}[/] to resolve conflicts manually.\n"
             f"After resolving, run:\n"
             f"  [cyan]git add .[/]\n"
@@ -361,7 +373,7 @@ def _apply_patch_and_handle_conflicts(
             )
             rprint(
                 Panel(
-                    f"[yellow]Patch applied with conflicts saved in [bold].rej[/] files.[/]\n{guidance_message_after_conflict}",
+                    f"[yellow]Patch applied with conflicts saved in [bold].rej[/] files.[/]\n{guidance_message}",
                     title="[bold yellow]Manual Resolution Required[/]",
                     border_style="yellow",
                     box=PANEL_BOX_STYLE,
@@ -372,10 +384,10 @@ def _apply_patch_and_handle_conflicts(
             console.print("[bold]Applying patch with --3way merge option...[/]")
             run_command(
                 ["git", "apply", "--3way", str(patch_file_path)], cwd=worktree_path
-            )
+            )  # Does not stop, applies what it can
             rprint(
                 Panel(
-                    f"[yellow]Patch applied with 3-way merge attempt.[/]\n{guidance_message_after_conflict}",
+                    f"[yellow]Patch applied with 3-way merge attempt.[/]\n{guidance_message}",
                     title="[bold yellow]Manual Resolution Required[/]",
                     border_style="yellow",
                     box=PANEL_BOX_STYLE,
@@ -387,10 +399,9 @@ def _apply_patch_and_handle_conflicts(
             return PatchApplyStatus.ABORTED_CONFLICT
 
 
-# --- Refactored Helper Functions for prepare operation details ---
 def _prepare_operation_details(
-    original_source_ref_name: str,  # e.g., 'my-feature-branch' or 'HEAD'
-    effective_diff_source: str,  # e.g., 'origin/develop..my-feature-branch'
+    original_source_ref_name: str,
+    effective_diff_source: str,
     target_branch: str,
     message_override: str | None,
     repo_root: Path,
@@ -414,10 +425,10 @@ def _prepare_operation_details(
             f"[bold]Attempting to extract JIRA ID from commits in effective diff source: '{effective_diff_source}'...[/]"
         )
         # Pass target_branch for fallback logic within get_commits_for_patch, though less critical if effective_diff_source is usually a range
-        commits_for_jira_extraction = get_commits_for_patch(
+        commits_for_jira = get_commits_for_patch(
             effective_diff_source, target_branch, repo_root
         )
-        for commit_msg in commits_for_jira_extraction:
+        for commit_msg in commits_for_jira:
             jira_id = extract_jira_id(commit_msg)
             if jira_id:
                 console.print(
@@ -442,36 +453,41 @@ def _prepare_operation_details(
             "[bold red]Error:[/] Could not determine JIRA ID from source, patch commits, or target branch name."
         )
         console.print(
-            "Please ensure the JIRA ID is present in one of these locations or provide a full commit message with -m."
+            "Please ensure the JIRA ID is present or provide a full commit message with -m."
         )
         raise typer.Exit(code=1)
 
     # Get commit messages for the final commit body, using effective_diff_source
-    commits_for_final_message = get_commits_for_patch(
+    commits_for_final_msg = get_commits_for_patch(
         effective_diff_source, target_branch, repo_root
     )
     commit_list_str = (
-        "\n".join([f"- {c}" for c in commits_for_final_message])
-        if commits_for_final_message
+        "\n".join([f"- {c}" for c in commits_for_final_msg])
+        if commits_for_final_msg
         else "No individual commits (changes are uncommitted or patch base is HEAD)."
     )
 
-    # Prepare commit message
-    if message_override:
-        final_commit_message = message_override
-    else:
-        final_commit_message = (
-            f"{jira_id}: Apply changes from '{original_source_ref_name}' to '{target_branch}'\n\n"
-            f"This commit squashes the following changes:\n{commit_list_str}"
-        )
+    final_commit_message = message_override or (
+        f"{jira_id}: Apply changes from '{original_source_ref_name}' to '{target_branch}'\n\n"
+        f"This commit squashes the following changes:\n{commit_list_str}"
+    )
 
-    # Prepare temporary file paths
+    # Path for the worktree itself. This directory will be created by mkdtemp.
+    # _setup_worktree will clean it up if it exists and then git worktree add will use/recreate it.
     temp_worktree_dir_path = Path(
         tempfile.mkdtemp(
             prefix="git-port-wt-", suffix=f"-{target_branch.replace('/', '_')}"
         )
     )
-    patch_file_path = temp_worktree_dir_path / f"patch-{jira_id}.diff"
+
+    # Patch file is created as an independent temporary file.
+    # We use delete=False because its name is passed around and it's explicitly cleaned up.
+    # It's created in the repo_root for easier inspection if needed during manual conflict resolution.
+    patch_temp_file = tempfile.NamedTemporaryFile(
+        delete=False, suffix=".diff", prefix=f"patch-{jira_id}-", dir=repo_root
+    )
+    patch_file_path = Path(patch_temp_file.name)
+    patch_temp_file.close()  # File is created, but empty. _create_patch_file will populate it.
 
     return PreparedOperationDetails(
         final_commit_message=final_commit_message,
@@ -488,53 +504,49 @@ def _cleanup_worktree(worktree_path: Path, repo_root: Path):
         # Ensure CWD is repo_root for git commands, though git worktree remove might be less sensitive to CWD
         # The primary concern is that the worktree path itself isn't the CWD.
         if Path.cwd() == worktree_path:
-            os.chdir(repo_root)  # Move out of worktree dir before removing it
-
+            os.chdir(repo_root)
         run_command(
             ["git", "worktree", "remove", "--force", str(worktree_path)],
             cwd=repo_root,
             check=True,
         )
         console.print(
-            f"[green]{SUCCESS_SYMBOL} Successfully removed worktree: {worktree_path}[/]"
+            f"[green]{SUCCESS_SYMBOL} Successfully removed worktree registration: {worktree_path}[/]"
         )
+        # git worktree remove --force should also remove the directory.
+        # If it's still there (e.g., permissions, or unexpected files), shutil.rmtree later will try.
     except ShellCommandError as e:
         console.print(
-            f"[bold yellow]Warning:[/] Could not automatically remove worktree {worktree_path}. Git command failed: {e.stderr}"
+            f"[bold yellow]Warning:[/] 'git worktree remove' failed for {worktree_path}. Git command stderr: {e.stderr}[/]"
         )
         console.print(
-            f"Please remove it manually: git worktree remove --force {worktree_path}"
+            f"You may need to remove it manually: git worktree remove --force {worktree_path}"
         )
     except Exception as e:
         console.print(
-            f"[bold yellow]Warning:[/] An unexpected error occurred while trying to remove worktree {worktree_path}: {e}"
+            f"[bold yellow]Warning:[/] Unexpected error removing worktree {worktree_path}: {e}[/]"
         )
         console.print(
-            f"Please remove it manually: git worktree remove --force {worktree_path}"
+            f"You may need to remove it manually: git worktree remove --force {worktree_path}"
         )
 
 
 @app.command()
 def apply(
-    target: str = typer.Argument(
-        ..., help="Target branch to apply changes to (e.g., 'main' or 'develop')"
-    ),
+    target: str = typer.Argument(..., help="Target branch (e.g., 'main')"),
     message: str | None = typer.Option(
-        None,
-        "-m",
-        "--message",
-        help="Custom commit message. Overrides auto-generated message.",
+        None, "-m", "--message", help="Custom commit message."
     ),
     source: str | None = typer.Option(
         None,
         "-s",
         "--source",
-        help="Source branch/commit to create patch from (e.g., 'origin/develop', 'HEAD~3', 'A..B'). Defaults to the current git branch if not specified.",
+        help="Source branch/commit/range (e.g., 'origin/develop', 'HEAD~3', 'A..B'). Defaults to current branch.",
     ),
     base: str = typer.Option(
         "origin/develop",
         "--base",
-        help="Base branch/commit to calculate the diff from, if the source is not already a range. Defaults to 'origin/develop'. Active only if --source is not a range.",
+        help="Base for diff if source isn't a range. Default: 'origin/develop'.",
     ),
 ):
     """
@@ -573,45 +585,44 @@ def apply(
        $ python scripts/git_port_to_target.py main
     """
     repo_root_val = get_git_repo_root()
-    original_dir = Path.cwd()  # Save original CWD
-    os.chdir(repo_root_val)  # Ensure all git commands run from repo root
+    original_dir = Path.cwd()
+    os.chdir(repo_root_val)
 
     resolved_source_ref_name = _resolve_source_branch(source, repo_root_val)
-
     is_explicit_range = ".." in resolved_source_ref_name
+    effective_diff_source = (
+        resolved_source_ref_name
+        if is_explicit_range
+        else f"{base}..{resolved_source_ref_name}"
+    )
 
-    if is_explicit_range:
-        effective_diff_source = resolved_source_ref_name
-        _display_initial_info(
-            resolved_source_ref_name,
-            "N/A (explicit range)",
-            target,
-            repo_root_val,
-            is_explicit_range,
-        )
-    else:
-        effective_diff_source = f"{base}..{resolved_source_ref_name}"
-        _display_initial_info(
-            resolved_source_ref_name, base, target, repo_root_val, is_explicit_range
-        )
+    _display_initial_info(
+        resolved_source_ref_name,
+        base if not is_explicit_range else "N/A (explicit range)",
+        target,
+        repo_root_val,
+        is_explicit_range,
+    )
 
-    if resolved_source_ref_name == target:
+    if (
+        resolved_source_ref_name == target
+    ):  # Or check against effective_diff_source's "target part"
         console.print(
             "[bold red]Error:[/] Target branch cannot be the same as the resolved source branch name."
         )
+        os.chdir(original_dir)
         raise typer.Exit(code=1)
 
     op_details = _prepare_operation_details(
         resolved_source_ref_name, effective_diff_source, target, message, repo_root_val
     )
-    final_commit_message = op_details.final_commit_message
-    jira_id = op_details.jira_id
-    temp_worktree_dir_path = op_details.temp_worktree_dir_path
-    patch_file_path = op_details.patch_file_path
+
+    # op_details now contains temp_worktree_dir_path and patch_file_path
+    # These need to be referenced directly from op_details for cleanup.
 
     rprint(
         Panel(
-            final_commit_message,
+            op_details.final_commit_message,
             title="[bold blue]Generated Commit Message[/]",
             border_style="blue",
             expand=False,
@@ -621,30 +632,53 @@ def apply(
     if not typer.confirm(
         "Proceed with this commit message and operation?", default=True
     ):
-        os.chdir(original_dir)  # Restore original CWD before exiting
+        os.chdir(original_dir)
+        # Cleanup preliminarily created files if user aborts here
+        if op_details.patch_file_path.exists():
+            op_details.patch_file_path.unlink()
+        if op_details.temp_worktree_dir_path.exists():  # Created by mkdtemp
+            shutil.rmtree(op_details.temp_worktree_dir_path)
         console.print("[bold yellow]Operation aborted by user.[/]")
         raise typer.Exit()
 
-    _create_patch_file(effective_diff_source, patch_file_path, repo_root_val)
+    patch_has_content = _create_patch_file(
+        effective_diff_source, op_details.patch_file_path, repo_root_val
+    )
+
+    if not patch_has_content:
+        console.print("[bold yellow]No textual changes detected. Nothing to apply.[/]")
+        # Cleanup files before exiting
+        os.chdir(original_dir)
+        if op_details.patch_file_path.exists():
+            op_details.patch_file_path.unlink()
+        if op_details.temp_worktree_dir_path.exists():  # Created by mkdtemp
+            shutil.rmtree(op_details.temp_worktree_dir_path)
+        raise typer.Exit()
 
     cleanup_worktree_on_exit = False
     new_branch_in_worktree = ""
+    patch_status: PatchApplyStatus | None = None  # Initialize patch_status
 
     try:
         with console.status(
             f"[bold green]Processing changes for {target}...[/]", spinner="dots"
         ):
             new_branch_in_worktree = _setup_worktree(
-                target, temp_worktree_dir_path, jira_id, repo_root_val
+                target,
+                op_details.temp_worktree_dir_path,
+                op_details.jira_id,
+                repo_root_val,
             )
-            cleanup_worktree_on_exit = True  # Mark for cleanup now that it's created
+            cleanup_worktree_on_exit = (
+                True  # Mark for cleanup now that it's (git worktree) created
+            )
 
-            os.chdir(temp_worktree_dir_path)  # Change to worktree for patch application
+            os.chdir(op_details.temp_worktree_dir_path)
 
             patch_status = _apply_patch_and_handle_conflicts(
-                patch_file_path,
-                temp_worktree_dir_path,
-                final_commit_message,
+                op_details.patch_file_path,
+                op_details.temp_worktree_dir_path,
+                op_details.final_commit_message,
                 new_branch_in_worktree,
             )
 
@@ -652,8 +686,8 @@ def apply(
                 case PatchApplyStatus.APPLIED_CLEANLY:
                     _commit_and_push_changes(
                         new_branch_in_worktree,
-                        final_commit_message,
-                        temp_worktree_dir_path,
+                        op_details.final_commit_message,
+                        op_details.temp_worktree_dir_path,
                     )
                     rprint(
                         Panel(
@@ -668,14 +702,29 @@ def apply(
                     console.print(
                         "[bold yellow]Worktree available for manual conflict resolution.[/]"
                     )
-                    return
+                    # Patch file is intentionally not deleted.
+                    return  # Exit function, finally will run but skip worktree cleanup due to flag
                 case PatchApplyStatus.ABORTED_CONFLICT:
                     console.print(
                         "[bold red]Operation aborted by user choice due to conflicts.[/]"
                     )
-                    raise typer.Exit(code=1)
+                    raise typer.Exit(code=1)  # finally will run and clean up worktree
 
-    except subprocess.CalledProcessError as e:
+    except ShellCommandError as e:  # Catch our custom exception from run_command
+        rprint(
+            Panel(
+                Text(f"A shell command failed:\n{e.args[0]}", style="red"),
+                title="[bold red]Shell Command Error[/]",
+                border_style="red",
+                box=PANEL_BOX_STYLE,
+            )
+        )
+        console.print(
+            f"[bold red]Error during operation. Worktree path: {op_details.temp_worktree_dir_path if op_details.temp_worktree_dir_path.exists() else 'Not created or already removed'}"
+        )
+    except (
+        subprocess.CalledProcessError
+    ) as e:  # Should be caught by ShellCommandError if run_command is used consistently
         rprint(
             Panel(
                 Text(
@@ -688,7 +737,7 @@ def apply(
             )
         )
         console.print(
-            f"[bold red]Error during operation. Worktree path: {temp_worktree_dir_path if temp_worktree_dir_path.exists() else 'Not created or already removed'}"
+            f"[bold red]Error during operation. Worktree path: {op_details.temp_worktree_dir_path if op_details.temp_worktree_dir_path.exists() else 'Not created or already removed'}"
         )
         # Let finally block handle cleanup if worktree was created
     except Exception as e:
@@ -704,34 +753,51 @@ def apply(
             )
         )
         console.print(
-            f"[bold red]Error during operation. Worktree path: {temp_worktree_dir_path if temp_worktree_dir_path.exists() else 'Not created or already removed'}"
+            f"[bold red]Error during operation. Worktree path: {op_details.temp_worktree_dir_path if op_details.temp_worktree_dir_path.exists() else 'Not created or already removed'}"
         )
         # Let finally block handle cleanup
     finally:
         os.chdir(
             original_dir
-        )  # IMPORTANT: Change back before attempting to remove worktree
-        if cleanup_worktree_on_exit and temp_worktree_dir_path.exists():
-            _cleanup_worktree(temp_worktree_dir_path, repo_root_val)
+        )  # IMPORTANT: Change back before attempting to remove worktree/patch
 
-        # Always try to remove the patch file unless conflicts occurred and we want to keep it
-        if (
-            patch_file_path.exists()
-            and patch_status != PatchApplyStatus.USER_WILL_RESOLVE
-        ):
+        # Cleanup worktree directory and git registration
+        if cleanup_worktree_on_exit and op_details.temp_worktree_dir_path.exists():
+            _cleanup_worktree(op_details.temp_worktree_dir_path, repo_root_val)
+
+        # After _cleanup_worktree, the directory might still exist if 'git worktree remove' failed or left files.
+        # Ensure the directory created by mkdtemp is removed.
+        if op_details.temp_worktree_dir_path.exists():
             try:
-                patch_file_path.unlink()
-                # console.print(f"[dim]Cleaned up patch file: {patch_file_path}[/]", অর্থের = True)
-            except OSError as e:
+                shutil.rmtree(op_details.temp_worktree_dir_path)
+                # console.print(f"[dim]Successfully cleaned up worktree directory: {op_details.temp_worktree_dir_path}[/dim]")
+            except Exception as e:
                 console.print(
-                    f"[yellow]Warning: Could not delete patch file {patch_file_path}: {e}[/]"
+                    f"[yellow]Warning: Could not fully delete worktree directory {op_details.temp_worktree_dir_path}: {e}. Manual cleanup may be required.[/]"
                 )
-        elif patch_status == PatchApplyStatus.USER_WILL_RESOLVE:
-            console.print(
-                f"[yellow]Patch file {patch_file_path} was not deleted due to conflicts.[/]"
-            )
 
-    # Ensure CWD is restored even if typer.Exit was called earlier for user abort
+        # Cleanup patch file
+        if op_details.patch_file_path.exists():
+            should_delete_patch = True
+            if patch_status == PatchApplyStatus.USER_WILL_RESOLVE:
+                should_delete_patch = False
+
+            if should_delete_patch:
+                try:
+                    op_details.patch_file_path.unlink()
+                    # console.print(f"[dim]Cleaned up patch file: {op_details.patch_file_path}[/dim]")
+                except OSError as e:
+                    console.print(
+                        f"[yellow]Warning: Could not delete patch file {op_details.patch_file_path}: {e}[/]"
+                    )
+            elif (
+                patch_status == PatchApplyStatus.USER_WILL_RESOLVE
+            ):  # This case means should_delete_patch was false
+                console.print(
+                    f"[yellow]Patch file {op_details.patch_file_path} was not deleted due to conflicts; available for manual review.[/]"
+                )
+
+    # Ensure CWD is restored if typer.Exit was called earlier (though it should already be by now)
     if Path.cwd() != original_dir:
         os.chdir(original_dir)
 
