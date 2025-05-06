@@ -19,7 +19,16 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt
 from rich import print as rprint
+from rich import box
 from pydantic import BaseModel
+
+# --- Configuration for OS-specific rendering ---
+IS_WINDOWS = os.name == "nt"
+PANEL_BOX_STYLE = (
+    box.ASCII if IS_WINDOWS else box.ROUNDED
+)  # ROUNDED is default, ASCII is simpler for compatibility
+SUCCESS_SYMBOL = "(*)" if IS_WINDOWS else "✓"
+WARNING_SYMBOL = "(!)" if IS_WINDOWS else "⚠️"
 
 # Initialize Typer app and Rich console
 app = typer.Typer(
@@ -121,27 +130,70 @@ def extract_jira_id(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def get_commits_for_patch(source_branch: str, repo_root: Path) -> list[str]:
-    """Get list of commit messages that will be included in the patch.
+def get_commits_for_patch(
+    resolved_source_ref: str, target_branch: str, repo_root: Path
+) -> list[str]:
+    """Get list of commit messages for the patch.
 
-    Fetches commits from 'source_branch' directly.
+    If resolved_source_ref is a range (e.g., 'main..feature'), lists commits in that range.
+    If resolved_source_ref is a single branch/commit, lists commits on that ref
+    that are not on the target_branch.
     """
     try:
+        if ".." in resolved_source_ref:  # It's a range like A..B
+            commit_range_for_log = resolved_source_ref
+        else:  # It's a single ref like 'my-feature'
+            commit_range_for_log = f"{target_branch}..{resolved_source_ref}"
+
+        console.print(
+            f"[info]Fetching commit messages for range: '{commit_range_for_log}'[/info]"
+        )
         commit_output = run_command(
-            ["git", "log", "--pretty=format:%s", source_branch], cwd=repo_root
+            ["git", "log", "--pretty=format:%s", "--no-merges", commit_range_for_log],
+            cwd=repo_root,
         )
         if not commit_output:
-            console.print(
-                "[bold yellow]Warning:[/] No commits found between source branch and HEAD."
-            )
-            return []
+            # Try without target_branch if it was a single ref and no commits were found
+            # This can happen if target_branch is ahead of or same as resolved_source_ref
+            if ".." not in resolved_source_ref:
+                console.print(
+                    f"[yellow]Warning:[/] No commits found with range '{commit_range_for_log}'. Trying source branch '{resolved_source_ref}' directly against its own history for context (this might list more commits if target is behind or unrelated).[/yellow]"
+                )
+                commit_output_fallback = run_command(
+                    [
+                        "git",
+                        "log",
+                        "--pretty=format:%s",
+                        "--no-merges",
+                        resolved_source_ref,
+                        f"^{target_branch}",
+                    ],
+                    cwd=repo_root,
+                    check=False,  # check=False as it might be empty
+                )
+                # Check if fallback has content and use it only if it's more specific or original was empty
+                if commit_output_fallback:
+                    commit_output = commit_output_fallback
+                elif (
+                    not commit_output
+                ):  # If original was empty and fallback is also empty
+                    console.print(
+                        f"[yellow]Warning:[/] No unique commits found for source '{resolved_source_ref}' relative to '{target_branch}'. The source might be behind or at the same point as the target, or it's an empty branch."
+                    )
+                    return []
+            else:  # It was a specific range A..B and it's empty
+                console.print(
+                    f"[yellow]Warning:[/] No commits found for the specified range '{resolved_source_ref}'. Ensure the range is correct and contains commits."
+                )
+                return []
         return commit_output.split("\n")
     except ShellCommandError as e:
         if "unknown revision or path not in the working tree" in str(e.stderr).lower():
             console.print(
-                f"[bold yellow]Warning:[/] Could not find commits for patch. Source branch '{source_branch}' might be invalid or have no diff with HEAD."
+                f"[bold yellow]Warning:[/] Could not find commits. Source '{resolved_source_ref}' or target '{target_branch}' might be invalid or have no diff."
             )
             return []
+        console.print(f"[bold red]Error getting commits for patch:[/] {e}")
         raise
 
 
@@ -160,41 +212,78 @@ def _resolve_source_branch(source_arg: str | None, repo_root: Path) -> str:
         return source_arg
     else:
         current_branch_val = get_current_branch(repo_root)
-        console.print(f"[info]No source specified, using current branch: '{current_branch_val}'[/info]")
+        console.print(
+            f"[info]No source specified, using current branch: '{current_branch_val}'[/info]"
+        )
         return current_branch_val
+
 
 def _display_initial_info(resolved_source: str, target_branch: str, repo_root: Path):
     """Displays initial information about the porting operation."""
-    console.print(f"[info]Attempting to port changes from [bold cyan]{resolved_source}[/] to [bold cyan]{target_branch}[/] in repo: {repo_root}[/info]")
+    console.print(
+        f"[info]Attempting to port changes from [bold cyan]{resolved_source}[/] to [bold cyan]{target_branch}[/] in repo: {repo_root}[/info]"
+    )
 
-def _create_patch_file(resolved_source: str, target_branch: str, patch_file_path: Path, repo_root: Path):
-    """Creates a patch file from the resolved source against the target branch."""
-    console.print(f"[info]Creating patch file for changes from '{resolved_source}' (relative to '{target_branch}')...[/info]")
-    # Using target...resolved_source to get changes on resolved_source not in target
-    # Ensure target branch is fetched if it's a remote tracking branch for accuracy
-    # For simplicity here, assuming 'target_branch' is a locally known ref or resolvable by git diff.
+
+def _create_patch_file(
+    resolved_source_ref: str, target_branch: str, patch_file_path: Path, repo_root: Path
+):
+    """Creates a patch file.
+
+    If resolved_source_ref is a range (e.g., 'A..B'), diffs that range.
+    If resolved_source_ref is a single branch/commit, diffs changes on that ref
+    that are not on target_branch (target_branch..resolved_source_ref).
+    """
+    if ".." in resolved_source_ref:  # It's a range like A..B
+        diff_ref_or_range = resolved_source_ref
+        console.print(
+            f"[info]Creating patch file for specific commit range: '{diff_ref_or_range}'...[/info]"
+        )
+    else:  # It's a single ref like 'my-feature'
+        diff_ref_or_range = f"{target_branch}..{resolved_source_ref}"
+        console.print(
+            f"[info]Creating patch file for changes from '{resolved_source_ref}' (not in '{target_branch}'). Diffing range: '{diff_ref_or_range}'...[/info]"
+        )
+
     run_command(
-        ["git", "diff", f"{target_branch}...{resolved_source}", "--output", str(patch_file_path)],
-        cwd=repo_root
+        ["git", "diff", diff_ref_or_range, "--output", str(patch_file_path)],
+        cwd=repo_root,
     )
     console.print(f"[info]Patch file created at: {patch_file_path}[/info]")
 
-def _setup_worktree(target_branch: str, worktree_path: Path, jira_id: str, repo_root: Path) -> str:
+
+def _setup_worktree(
+    target_branch: str, worktree_path: Path, jira_id: str, repo_root: Path
+) -> str:
     """Sets up a git worktree for the target branch and creates a new branch in it."""
-    console.print(f"[info]Setting up temporary worktree for branch '{target_branch}' at: {worktree_path}[/info]")
-    run_command(["git", "worktree", "add", "-f", str(worktree_path), target_branch], cwd=repo_root)
-    
+    console.print(
+        f"[info]Setting up temporary worktree for branch '{target_branch}' at: {worktree_path}[/info]"
+    )
+    run_command(
+        ["git", "worktree", "add", "-f", str(worktree_path), target_branch],
+        cwd=repo_root,
+    )
+
     new_branch_name = f"port/{jira_id}-{target_branch.replace('/', '_')}"
-    console.print(f"[info]Creating and switching to new branch '{new_branch_name}' in worktree.[/info]")
+    console.print(
+        f"[info]Creating and switching to new branch '{new_branch_name}' in worktree.[/info]"
+    )
     run_command(["git", "switch", "-c", new_branch_name], cwd=worktree_path)
     return new_branch_name
 
-def _commit_and_push_changes(new_branch_in_worktree: str, commit_message: str, worktree_path: Path):
+
+def _commit_and_push_changes(
+    new_branch_in_worktree: str, commit_message: str, worktree_path: Path
+):
     """Adds all changes, commits them, and pushes the new branch from the worktree."""
-    console.print(f"[info]Committing changes to branch '{new_branch_in_worktree}' with message...[/info]")
+    console.print(
+        f"[info]Committing changes to branch '{new_branch_in_worktree}' with message...[/info]"
+    )
     run_command(["git", "add", "-A"], cwd=worktree_path)
     run_command(["git", "commit", "-m", commit_message], cwd=worktree_path)
-    console.print(f"[info]Pushing branch '{new_branch_in_worktree}' to remote (origin)...[/info]")
+    console.print(
+        f"[info]Pushing branch '{new_branch_in_worktree}' to remote (origin)...[/info]"
+    )
     run_command(["git", "push", "origin", new_branch_in_worktree], cwd=worktree_path)
 
 
@@ -208,18 +297,23 @@ def _apply_patch_and_handle_conflicts(
     """Applies the patch, handles conflicts, and returns a PatchApplyStatus. CWD must be the worktree root."""
     console.print(f"[bold]Attempting to apply patch '{patch_file_path.name}'...[/]")
     try:
-        run_command(["git", "apply", "--check", str(patch_file_path)])
-        console.print("[green]✓ Patch can be applied cleanly.[/]")
-        run_command(["git", "apply", str(patch_file_path)])
-        console.print("[green]✓ Patch applied successfully.[/]")
+        # First, check if the patch can be applied cleanly
+        run_command(
+            ["git", "apply", "--check", str(patch_file_path)], cwd=worktree_path
+        )
+        console.print(f"[green]{SUCCESS_SYMBOL} Patch can be applied cleanly.[/]")
+        # If --check passes, apply the patch for real
+        run_command(["git", "apply", str(patch_file_path)], cwd=worktree_path)
+        console.print(f"[green]{SUCCESS_SYMBOL} Patch applied successfully.[/]")
         return PatchApplyStatus.APPLIED_CLEANLY
     except ShellCommandError:
         rprint(
             Panel(
-                "[bold red]⚠️ CONFLICTS DETECTED ⚠️[/]\nThe patch cannot be applied cleanly to the target branch.",
+                f"[bold red]{WARNING_SYMBOL} CONFLICTS DETECTED {WARNING_SYMBOL}[/]\nThe patch cannot be applied cleanly to the target branch.",
                 title="[bold red]Conflict Alert[/]",
                 border_style="red",
                 expand=False,
+                box=PANEL_BOX_STYLE,
             )
         )
         choice = Prompt.ask(
@@ -243,23 +337,29 @@ def _apply_patch_and_handle_conflicts(
 
         if choice == "1":
             console.print("[bold]Applying patch with --reject option...[/]")
-            run_command(["git", "apply", "--reject", str(patch_file_path)])
+            run_command(
+                ["git", "apply", "--reject", str(patch_file_path)], cwd=worktree_path
+            )
             rprint(
                 Panel(
                     f"[yellow]Patch applied with conflicts saved in [bold].rej[/] files.[/]\n{guidance_message_after_conflict}",
                     title="[bold yellow]Manual Resolution Required[/]",
                     border_style="yellow",
+                    box=PANEL_BOX_STYLE,
                 )
             )
             return PatchApplyStatus.USER_WILL_RESOLVE
         elif choice == "2":
             console.print("[bold]Applying patch with --3way merge option...[/]")
-            run_command(["git", "apply", "--3way", str(patch_file_path)])
+            run_command(
+                ["git", "apply", "--3way", str(patch_file_path)], cwd=worktree_path
+            )
             rprint(
                 Panel(
                     f"[yellow]Patch applied with 3-way merge attempt.[/]\n{guidance_message_after_conflict}",
                     title="[bold yellow]Manual Resolution Required[/]",
                     border_style="yellow",
+                    box=PANEL_BOX_STYLE,
                 )
             )
             return PatchApplyStatus.USER_WILL_RESOLVE
@@ -289,10 +389,12 @@ def _prepare_operation_details(
     # 2. If not found, attempt from commit messages of the patch
     if not jira_id:
         console.print(
-            f"[bold]Attempting to extract JIRA ID from commits in patch source: '{resolved_source}'...[/]"
+            f"[bold]Attempting to extract JIRA ID from commits in patch source: '{resolved_source}' (relative to '{target_branch}')...[/]"
         )
-        commits_for_patch = get_commits_for_patch(resolved_source, repo_root)
-        for commit_msg in commits_for_patch:
+        commits_for_jira_extraction = get_commits_for_patch(
+            resolved_source, target_branch, repo_root
+        )
+        for commit_msg in commits_for_jira_extraction:
             jira_id = extract_jira_id(commit_msg)
             if jira_id:
                 console.print(
@@ -319,7 +421,9 @@ def _prepare_operation_details(
         )
         raise typer.Exit(code=1)
 
-    commits_for_message = get_commits_for_patch(resolved_source, repo_root)
+    commits_for_message = get_commits_for_patch(
+        resolved_source, target_branch, repo_root
+    )
     commit_list_str = (
         "\n".join([f"- {c}" for c in commits_for_message])
         if commits_for_message
@@ -370,10 +474,36 @@ def apply(
     ),
 ):
     """
-    Apply changes from the current branch (or specified range) to a target branch
-    as a single new commit, without needing to switch branches.
+    Apply changes from the current branch or a specified source to a target branch.
 
-    It uses `git worktree` to operate on the target branch in a temporary directory.
+    This command automates the process of creating a patch from the source,
+    setting up a temporary worktree for the target branch, applying the patch,
+    and then committing and pushing the changes to a new branch on the remote.
+    It's designed to simplify porting changes without manual branch switching and patch handling.
+
+    If a JIRA ID is found in the source branch/commit name or commit messages,
+    it will be prepended to the commit message.
+
+    Usage Examples:
+    ---------------
+    1. Port changes from the current branch to 'main':
+       $ python scripts/git_port_to_target.py main
+
+    2. Port changes from a specific branch ('feature/my-work') to 'develop':
+       $ python scripts/git_port_to_target.py develop -s feature/my-work
+
+    3. Port changes from a specific commit ('abcdef1') to 'release/v1.2':
+       $ python scripts/git_port_to_target.py release/v1.2 -s abcdef1
+
+    4. Port a specific range of commits (between 'tag/v1.0' and 'feature/new-stuff') to 'main':
+       $ python scripts/git_port_to_target.py main -s tag/v1.0..feature/new-stuff
+
+    5. Port changes and provide a custom commit message:
+       $ python scripts/git_port_to_target.py main -m "PORT: Super important fix (JIRA-123)"
+
+    6. Port changes from the current branch (e.g., 'JIRA-456-do-something') to 'main',
+       allowing JIRA ID to be inferred:
+       $ python scripts/git_port_to_target.py main
     """
     repo_root = get_git_repo_root()
     original_dir = Path.cwd()
@@ -407,6 +537,7 @@ def apply(
                 title="[bold blue]Generated Commit Message[/]",
                 border_style="blue",
                 expand=False,
+                box=PANEL_BOX_STYLE,
             )
         )
         if not typer.confirm(
@@ -433,13 +564,16 @@ def apply(
             match patch_status:
                 case PatchApplyStatus.APPLIED_CLEANLY:
                     _commit_and_push_changes(
-                        new_branch_in_worktree, final_commit_message, temp_worktree_dir_path
+                        new_branch_in_worktree,
+                        final_commit_message,
+                        temp_worktree_dir_path,
                     )
                     rprint(
                         Panel(
-                            f"[bold green]✓ Successfully applied changes and pushed to branch [cyan]{new_branch_in_worktree}[/][/]",
+                            f"[bold green]{SUCCESS_SYMBOL} Successfully applied changes and pushed to branch [cyan]{new_branch_in_worktree}[/][/]",
                             title="[bold green]Success[/]",
                             border_style="green",
+                            box=PANEL_BOX_STYLE,
                         )
                     )
                 case PatchApplyStatus.USER_WILL_RESOLVE:
