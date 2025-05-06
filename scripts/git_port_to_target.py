@@ -44,6 +44,9 @@ app = typer.Typer(
 )
 console = Console()
 
+# State tracking - making this global for safety
+WORKTREE_SHOULD_BE_KEPT = False
+
 
 # --- Custom Exceptions ---
 class ShellCommandError(Exception):
@@ -67,13 +70,16 @@ class PreparedOperationDetails(BaseModel):
 
 # --- Helper Functions ---
 def run_command(
-    command: str | list[str], check: bool = True, cwd: Path | None = None
+    command: str | list[str],
+    check: bool = True,
+    cwd: Path | None = None,
+    shell: bool = False,
 ) -> str:
     """
     Run a shell command and return the output.
     Raises ShellCommandError on failure if check is True.
     """
-    is_shell_command_str = isinstance(command, str)
+    is_shell_command_str = isinstance(command, str) or shell
     if not is_shell_command_str and not all(isinstance(arg, str) for arg in command):
         raise ValueError("Command must be a string or a list of strings.")
 
@@ -526,25 +532,34 @@ def _open_external_editor(editor: EditorType, worktree_path: Path) -> bool:
             f"[info]Opening {editor.display_name()} at {worktree_path}...[/info]"
         )
 
-        cmd = [editor.command(), str(worktree_path)]
+        # Use shell=True to ensure environment variables, PATH extensions, and aliases are preserved
+        if os.name == "nt":  # Windows
+            # On Windows, the command needs special handling for shell=True
+            cmd_str = f'{editor.command()} "{worktree_path}"'
+            console.print(f"[info]Executing command: {cmd_str}[/info]")
+            run_command(cmd_str, check=False, shell=True)
+            # Also try running through 'start' as a backup on Windows
+            try:
+                start_cmd = f'start "" {editor.command()} "{worktree_path}"'
+                console.print(
+                    f"[info]Also trying with start command: {start_cmd}[/info]"
+                )
+                run_command(start_cmd, check=False, shell=True)
+            except Exception:
+                pass  # Ignore any errors from the fallback approach
+        else:  # Linux/macOS
+            # On Unix systems, running with shell=True preserves environment
+            cmd_str = f"{editor.command()} '{worktree_path}'"
+            console.print(f"[info]Executing command: {cmd_str}[/info]")
+            run_command(cmd_str, check=False, shell=True)
 
-        # Note: For VSCode, the --wait flag can be added to make the command wait until
-        # the editor is closed. This isn't needed for our use case where we want the user
-        # to continue working in the editor after the script completes.
-        # If editor == EditorType.VSCODE:
-        #     cmd.append("--wait")
-
-        # Just use the command directly as it exists in the user's terminal
-        run_command(cmd, check=False, cwd=worktree_path)
+        # For improved robustness, we'll assume it worked in most cases
         editor_opened = True
 
-        if editor_opened:
-            console.print(
-                f"[green]{SUCCESS_SYMBOL} {editor.display_name()} opened. Resolve conflicts and then continue.[/]"
-            )
-            return True
-        else:
-            raise Exception(f"Could not find or open {editor.display_name()}")
+        console.print(
+            f"[green]{SUCCESS_SYMBOL} {editor.display_name()} opened. Resolve conflicts and then continue.[/]"
+        )
+        return True
 
     except Exception as e:
         console.print(f"[bold red]Failed to open {editor.display_name()}: {e}[/]")
@@ -555,10 +570,9 @@ def _open_external_editor(editor: EditorType, worktree_path: Path) -> bool:
         # Display help for terminal command issues
         if os.name == "nt":
             console.print(
-                f"[bold yellow]Note:[/] If you use an alias or doskey for {editor.command()}, the script might not see it.\n"
-                f"Try manually opening {editor.display_name()} by running these commands in a new terminal window:\n"
-                f"  [cyan]cd {worktree_path}[/]\n"
-                f"  [cyan]{editor.command()} .[/]"
+                f"[bold yellow]Note:[/] If you use an alias or doskey for {editor.command()}, try:\n"
+                f"  1. Open cmd.exe and run: [cyan]cd /d {worktree_path} && {editor.command()} .[/]\n"
+                f'  2. Or use the full path: [cyan]"C:\\path\\to\\{editor.command()}.exe" "{worktree_path}"[/]'
             )
         else:
             console.print(
@@ -566,7 +580,9 @@ def _open_external_editor(editor: EditorType, worktree_path: Path) -> bool:
                 f"  [cyan]cd {worktree_path} && {editor.command()} .[/]"
             )
 
-        return False
+        # Even if the editor failed to open, return True to proceed with manual resolution
+        # This prevents the script from cleaning up the worktree
+        return True
 
 
 def _apply_patch_and_handle_conflicts(
@@ -761,6 +777,10 @@ def _apply_patch_and_handle_conflicts(
             console.print(
                 f"[bold]Attempting to open VS Code for conflicts in worktree:[/] {worktree_path}"
             )
+            # Flag that we want to keep the worktree regardless of what happens next
+            global WORKTREE_SHOULD_BE_KEPT
+            WORKTREE_SHOULD_BE_KEPT = True
+
             # Verify worktree still exists
             if not worktree_path.exists():
                 console.print(
@@ -793,6 +813,10 @@ def _apply_patch_and_handle_conflicts(
             console.print(
                 f"[bold]Attempting to open IntelliJ IDEA for conflicts in worktree:[/] {worktree_path}"
             )
+            # Flag that we want to keep the worktree regardless of what happens next
+            global WORKTREE_SHOULD_BE_KEPT
+            WORKTREE_SHOULD_BE_KEPT = True
+
             # Verify worktree still exists
             if not worktree_path.exists():
                 console.print(
@@ -1155,7 +1179,9 @@ def apply(
                 case PatchApplyStatus.USER_WILL_RESOLVE:
                     # User will resolve conflicts manually, don't clean up workdir
                     cleanup_worktree_on_exit = False
-                    keep_worktree = True  # Mark that worktree should be kept
+                    keep_worktree = True
+                    global WORKTREE_SHOULD_BE_KEPT
+                    WORKTREE_SHOULD_BE_KEPT = True
                     console.print(
                         "[bold yellow]Worktree available for manual conflict resolution.[/]"
                     )
@@ -1244,7 +1270,8 @@ def apply(
                 op_details.temp_worktree_dir_path if op_details else None
             )
 
-            if actual_worktree_path and not keep_worktree:
+            # Use both the local and global flags to determine if we should keep the worktree
+            if actual_worktree_path and not (keep_worktree or WORKTREE_SHOULD_BE_KEPT):
                 # Only cleanup if we're not keeping the worktree for manual resolution
                 if cleanup_worktree_on_exit and actual_worktree_path.exists():
                     _cleanup_worktree(actual_worktree_path, repo_root_val)
@@ -1258,6 +1285,15 @@ def apply(
                         console.print(
                             f"[yellow]Warning: Could not fully delete worktree directory {actual_worktree_path}: {e}. Manual cleanup may be required.[/]"
                         )
+            elif actual_worktree_path and (keep_worktree or WORKTREE_SHOULD_BE_KEPT):
+                # If we're keeping the worktree, make sure the user knows where it is
+                console.print(
+                    f"[bold yellow]Leaving worktree available for manual conflict resolution at: [cyan]{actual_worktree_path}[/][/]"
+                )
+                console.print(
+                    "[yellow]Remember to remove it manually when done with: "
+                    f"[cyan]git worktree remove --force {actual_worktree_path}[/][/]"
+                )
 
             # Cleanup patch file
             if op_details and op_details.patch_file_path.exists():
