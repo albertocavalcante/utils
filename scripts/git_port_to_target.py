@@ -16,7 +16,6 @@ import tempfile
 import shutil
 import traceback
 import datetime
-import glob
 from enum import Enum
 from pathlib import Path
 
@@ -83,6 +82,10 @@ def run_command(
     is_shell_command_str = isinstance(command, str) or shell
     if not is_shell_command_str and not all(isinstance(arg, str) for arg in command):
         raise ValueError("Command must be a string or a list of strings.")
+        
+    # Safety check: when using shell=True, command must be a string
+    if shell and not isinstance(command, str):
+        command = " ".join(command) if isinstance(command, list) else str(command)
 
     try:
         result = subprocess.run(
@@ -235,88 +238,6 @@ class EditorType(Enum):
         elif self == EditorType.INTELLIJ:
             return "IntelliJ IDEA"
         return self.value
-
-    def get_possible_paths(self) -> list[str]:
-        """Return possible paths for this editor on the current OS."""
-        if self == EditorType.INTELLIJ:
-            if os.name == "nt":  # Windows
-                # Try environment variable expansion first
-                idea_home_paths = [
-                    os.path.expandvars("%IDEA_HOME%\\bin\\idea64.exe"),
-                    os.path.expandvars("%IDEA_HOME%\\bin\\idea.exe"),
-                ]
-                # Add common installation paths
-                program_files_paths = [
-                    os.path.join(
-                        os.environ.get("ProgramFiles", "C:\\Program Files"),
-                        "JetBrains",
-                        "IntelliJ*",
-                        "bin",
-                        "idea64.exe",
-                    ),
-                    os.path.join(
-                        os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
-                        "JetBrains",
-                        "IntelliJ*",
-                        "bin",
-                        "idea.exe",
-                    ),
-                ]
-                # Add paths from possible user-profile locations (JetBrains Toolbox)
-                user_profile_paths = []
-                if "USERPROFILE" in os.environ:
-                    user_profile_paths = [
-                        os.path.join(
-                            os.environ["USERPROFILE"],
-                            "AppData",
-                            "Local",
-                            "JetBrains",
-                            "Toolbox",
-                            "apps",
-                            "IDEA-U",
-                            "*",
-                            "bin",
-                            "idea64.exe",
-                        ),
-                    ]
-
-                return idea_home_paths + program_files_paths + user_profile_paths
-            else:  # Mac/Linux
-                return [
-                    "/Applications/IntelliJ IDEA.app/Contents/MacOS/idea",
-                    os.path.expanduser(
-                        "~/Applications/IntelliJ IDEA.app/Contents/MacOS/idea"
-                    ),
-                    "/usr/local/bin/idea",
-                    "/snap/intellij-idea-ultimate/current/bin/idea.sh",
-                ]
-        elif self == EditorType.VSCODE:
-            if os.name == "nt":  # Windows
-                return [
-                    os.path.expandvars(
-                        "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe"
-                    ),
-                    os.path.join(
-                        os.environ.get("ProgramFiles", "C:\\Program Files"),
-                        "Microsoft VS Code",
-                        "Code.exe",
-                    ),
-                    os.path.join(
-                        os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
-                        "Microsoft VS Code",
-                        "Code.exe",
-                    ),
-                ]
-            else:  # Mac/Linux
-                return [
-                    "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
-                    os.path.expanduser(
-                        "~/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
-                    ),
-                    "/usr/bin/code",
-                    "/usr/local/bin/code",
-                ]
-        return []
 
 
 # --- Refactored Helper Functions for apply command ---
@@ -606,23 +527,6 @@ def _commit_and_push_changes(
             raise
 
 
-def _find_executable_path(path_pattern: str) -> str | None:
-    """Find an executable path, expanding wildcards if needed."""
-    # If no wildcards, just check if it exists directly
-    if "*" not in path_pattern:
-        return path_pattern if os.path.exists(path_pattern) else None
-
-    # Handle wildcards with glob
-    matching_paths = glob.glob(path_pattern)
-    if matching_paths:
-        # Return the first path that exists
-        for path in matching_paths:
-            if os.path.exists(path):
-                return path
-
-    return None
-
-
 def _open_external_editor(editor: EditorType, worktree_path: Path) -> bool:
     """Open an external editor for conflict resolution. Returns True if successful."""
     console.print(f"[info]Opening {editor.display_name()} at {worktree_path}...[/info]")
@@ -631,52 +535,26 @@ def _open_external_editor(editor: EditorType, worktree_path: Path) -> bool:
     try:
         # Try direct command first
         cmd = [editor.command(), str(worktree_path)]
-        console.print(f"[info]Trying direct command: {cmd}[/info]")
+        console.print(f"[info]Executing command: {cmd}[/info]")
+
         try:
             run_command(cmd, check=False)
-            console.print(f"[green]Direct command succeeded[/]")
+            console.print(f"[green]Successfully launched {editor.display_name()}[/]")
             return True
         except Exception as e:
-            console.print(f"[yellow]Direct command failed: {e}[/]")
+            console.print(f"[yellow]Command failed: {e}[/]")
 
-        # Try with known paths
-        for path_pattern in editor.get_possible_paths():
-            resolved_path = _find_executable_path(path_pattern)
-            if resolved_path:
-                console.print(f"[info]Found executable at: {resolved_path}[/info]")
-                try:
-                    run_command([resolved_path, str(worktree_path)], check=False)
-                    console.print(
-                        f"[green]Successfully launched using path: {resolved_path}[/]"
-                    )
-                    return True
-                except Exception as e:
-                    console.print(f"[yellow]Failed with path {resolved_path}: {e}[/]")
-
-        # Final fallback: show manual instructions
+        # Show helpful instructions for manual opening
         console.print(
-            f"[bold yellow]Could not automatically open editor. Please manually open {worktree_path} in {editor.display_name()}[/]"
+            f"[bold yellow]Could not automatically open {editor.display_name()}. Please open manually:[/]"
         )
 
-        if editor == EditorType.INTELLIJ and os.name == "nt":
-            # Try to get doskey definition
-            try:
-                doskey_output = run_command(
-                    "doskey /macros:all | findstr /i idea", shell=True, check=False
-                )
-                if doskey_output:
-                    console.print(
-                        f"[info]Found doskey definition: {doskey_output}[/info]"
-                    )
-            except Exception:
-                pass
+        console.print(
+            f"[cyan]The worktree is located at:[/] {worktree_path}\n"
+            f"[cyan]1. Open {editor.display_name()} manually[/]\n"
+            f"[cyan]2. Use File > Open to navigate to the worktree directory[/]"
+        )
 
-            console.print(
-                f"[yellow]For IntelliJ IDEA, you may need to manually:[/]\n"
-                f"  1. Open a new command prompt\n"
-                f"  2. Navigate to: [cyan]cd /d {worktree_path}[/]\n"
-                f"  3. Run IntelliJ with: [cyan]idea .[/]"
-            )
     except Exception as e:
         console.print(f"[bold red]Error trying to open editor: {e}[/]")
 
@@ -755,7 +633,7 @@ def _apply_patch_and_handle_conflicts(
 
         # Create a more appealing menu with better descriptions
         console.print("\n[bold]Please select how you want to handle the conflicts:[/]")
-
+        
         options = [
             (
                 "1",
@@ -765,17 +643,17 @@ def _apply_patch_and_handle_conflicts(
             (
                 "2",
                 "Apply with 3-way merge",
-                "Uses Git's 3-way merge to show conflicts in files",
+                "Uses Git's 3-way merge to show conflicts directly in files",
             ),
             (
                 "3",
                 "Open in VS Code",
-                "Open the worktree in VS Code to resolve conflicts",
+                "Attempt to open VS Code with the worktree for resolving conflicts",
             ),
             (
                 "4",
                 "Open in IntelliJ IDEA",
-                "Open the worktree in IntelliJ IDEA to resolve conflicts",
+                "Attempt to open IntelliJ with the worktree for resolving conflicts",
             ),
             ("5", "Abort operation", "Cancel the operation completely"),
         ]
