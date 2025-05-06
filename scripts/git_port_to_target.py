@@ -16,6 +16,7 @@ import tempfile
 import shutil
 import traceback
 import datetime
+import glob
 from enum import Enum
 from pathlib import Path
 
@@ -234,6 +235,88 @@ class EditorType(Enum):
         elif self == EditorType.INTELLIJ:
             return "IntelliJ IDEA"
         return self.value
+
+    def get_possible_paths(self) -> list[str]:
+        """Return possible paths for this editor on the current OS."""
+        if self == EditorType.INTELLIJ:
+            if os.name == "nt":  # Windows
+                # Try environment variable expansion first
+                idea_home_paths = [
+                    os.path.expandvars("%IDEA_HOME%\\bin\\idea64.exe"),
+                    os.path.expandvars("%IDEA_HOME%\\bin\\idea.exe"),
+                ]
+                # Add common installation paths
+                program_files_paths = [
+                    os.path.join(
+                        os.environ.get("ProgramFiles", "C:\\Program Files"),
+                        "JetBrains",
+                        "IntelliJ*",
+                        "bin",
+                        "idea64.exe",
+                    ),
+                    os.path.join(
+                        os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+                        "JetBrains",
+                        "IntelliJ*",
+                        "bin",
+                        "idea.exe",
+                    ),
+                ]
+                # Add paths from possible user-profile locations (JetBrains Toolbox)
+                user_profile_paths = []
+                if "USERPROFILE" in os.environ:
+                    user_profile_paths = [
+                        os.path.join(
+                            os.environ["USERPROFILE"],
+                            "AppData",
+                            "Local",
+                            "JetBrains",
+                            "Toolbox",
+                            "apps",
+                            "IDEA-U",
+                            "*",
+                            "bin",
+                            "idea64.exe",
+                        ),
+                    ]
+
+                return idea_home_paths + program_files_paths + user_profile_paths
+            else:  # Mac/Linux
+                return [
+                    "/Applications/IntelliJ IDEA.app/Contents/MacOS/idea",
+                    os.path.expanduser(
+                        "~/Applications/IntelliJ IDEA.app/Contents/MacOS/idea"
+                    ),
+                    "/usr/local/bin/idea",
+                    "/snap/intellij-idea-ultimate/current/bin/idea.sh",
+                ]
+        elif self == EditorType.VSCODE:
+            if os.name == "nt":  # Windows
+                return [
+                    os.path.expandvars(
+                        "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe"
+                    ),
+                    os.path.join(
+                        os.environ.get("ProgramFiles", "C:\\Program Files"),
+                        "Microsoft VS Code",
+                        "Code.exe",
+                    ),
+                    os.path.join(
+                        os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)"),
+                        "Microsoft VS Code",
+                        "Code.exe",
+                    ),
+                ]
+            else:  # Mac/Linux
+                return [
+                    "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+                    os.path.expanduser(
+                        "~/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
+                    ),
+                    "/usr/bin/code",
+                    "/usr/local/bin/code",
+                ]
+        return []
 
 
 # --- Refactored Helper Functions for apply command ---
@@ -523,88 +606,82 @@ def _commit_and_push_changes(
             raise
 
 
+def _find_executable_path(path_pattern: str) -> str | None:
+    """Find an executable path, expanding wildcards if needed."""
+    # If no wildcards, just check if it exists directly
+    if "*" not in path_pattern:
+        return path_pattern if os.path.exists(path_pattern) else None
+
+    # Handle wildcards with glob
+    matching_paths = glob.glob(path_pattern)
+    if matching_paths:
+        # Return the first path that exists
+        for path in matching_paths:
+            if os.path.exists(path):
+                return path
+
+    return None
+
+
 def _open_external_editor(editor: EditorType, worktree_path: Path) -> bool:
     """Open an external editor for conflict resolution. Returns True if successful."""
-    editor_opened = False
+    console.print(f"[info]Opening {editor.display_name()} at {worktree_path}...[/info]")
 
+    # Always assume success to prevent worktree deletion, even if editor fails
     try:
-        console.print(
-            f"[info]Opening {editor.display_name()} at {worktree_path}...[/info]"
-        )
+        # Try direct command first
+        cmd = [editor.command(), str(worktree_path)]
+        console.print(f"[info]Trying direct command: {cmd}[/info]")
+        try:
+            run_command(cmd, check=False)
+            console.print(f"[green]Direct command succeeded[/]")
+            return True
+        except Exception as e:
+            console.print(f"[yellow]Direct command failed: {e}[/]")
 
-        # Use shell=True to ensure environment variables, PATH extensions, and aliases are preserved
-        if os.name == "nt":  # Windows
-            # On Windows, the best approach is to create a command that maintains shell context
-            # This ensures doskeys/aliases work properly
-
-            # Try direct command first
-            cmd_str = f'{editor.command()} "{worktree_path}"'
-            console.print(f"[info]Executing command: {cmd_str}[/info]")
-            try:
-                run_command(cmd_str, check=False, shell=True)
-                editor_opened = True
-            except Exception as e:
-                console.print(f"[yellow]Direct command failed: {e}[/]")
-
-            # If direct command fails, try using a CMD wrapper that preserves shell context
-            if not editor_opened:
-                console.print(
-                    "[info]Trying with CMD wrapper for shell context preservation...[/info]"
-                )
-                # Use cmd /c to run a command and preserve shell environment including doskeys
-                # Careful with quoting here - this format avoids complex escaping issues
-                cmd_wrapper = [
-                    "cmd",
-                    "/c",
-                    f'cd /d "{worktree_path}" && {editor.command()} .',
-                ]
-                console.print(f"[info]Executing: {cmd_wrapper}[/info]")
+        # Try with known paths
+        for path_pattern in editor.get_possible_paths():
+            resolved_path = _find_executable_path(path_pattern)
+            if resolved_path:
+                console.print(f"[info]Found executable at: {resolved_path}[/info]")
                 try:
-                    run_command(
-                        cmd_wrapper, check=False
-                    )  # No shell=True here since we're using a list
-                    editor_opened = True
+                    run_command([resolved_path, str(worktree_path)], check=False)
+                    console.print(
+                        f"[green]Successfully launched using path: {resolved_path}[/]"
+                    )
+                    return True
                 except Exception as e:
-                    console.print(f"[yellow]CMD wrapper failed: {e}[/]")
+                    console.print(f"[yellow]Failed with path {resolved_path}: {e}[/]")
 
-        else:  # Linux/macOS
-            # On Unix systems, running with shell=True preserves environment
-            cmd_str = f"{editor.command()} '{worktree_path}'"
-            console.print(f"[info]Executing command: {cmd_str}[/info]")
-            run_command(cmd_str, check=False, shell=True)
-            editor_opened = True
-
+        # Final fallback: show manual instructions
         console.print(
-            f"[green]{SUCCESS_SYMBOL} Attempted to open {editor.display_name()}. Resolve conflicts and then continue.[/]"
+            f"[bold yellow]Could not automatically open editor. Please manually open {worktree_path} in {editor.display_name()}[/]"
         )
-        # Always return True to prevent worktree deletion, even if opening fails
-        return True
 
+        if editor == EditorType.INTELLIJ and os.name == "nt":
+            # Try to get doskey definition
+            try:
+                doskey_output = run_command(
+                    "doskey /macros:all | findstr /i idea", shell=True, check=False
+                )
+                if doskey_output:
+                    console.print(
+                        f"[info]Found doskey definition: {doskey_output}[/info]"
+                    )
+            except Exception:
+                pass
+
+            console.print(
+                f"[yellow]For IntelliJ IDEA, you may need to manually:[/]\n"
+                f"  1. Open a new command prompt\n"
+                f"  2. Navigate to: [cyan]cd /d {worktree_path}[/]\n"
+                f"  3. Run IntelliJ with: [cyan]idea .[/]"
+            )
     except Exception as e:
-        console.print(f"[bold red]Failed to open {editor.display_name()}: {e}[/]")
-        console.print(
-            f"[yellow]You can manually open {worktree_path} in your editor.[/]"
-        )
+        console.print(f"[bold red]Error trying to open editor: {e}[/]")
 
-        # Display help for terminal command issues
-        if os.name == "nt":
-            console.print(
-                f"[bold yellow]Note:[/] Since you may be using a doskey/alias for {editor.command()}, try:\n"
-                f"  1. Open cmd.exe and run: [cyan]cd /d {worktree_path} && {editor.command()} .[/]\n"
-                f"  2. Or create a batch file (editor.bat) with these lines:\n"
-                f"     [cyan]@echo off[/]\n"
-                f'     [cyan]cd /d "{worktree_path}"[/]\n'
-                f"     [cyan]{editor.command()} .[/]"
-            )
-        else:
-            console.print(
-                f"[bold yellow]Note:[/] If you normally use an alias for {editor.command()}, try:\n"
-                f"  [cyan]cd {worktree_path} && {editor.command()} .[/]"
-            )
-
-        # Even if the editor failed to open, return True to proceed with manual resolution
-        # This prevents the script from cleaning up the worktree
-        return True
+    # Always return True even on failure to prevent worktree deletion
+    return True
 
 
 def _apply_patch_and_handle_conflicts(
