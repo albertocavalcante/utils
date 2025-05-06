@@ -15,6 +15,7 @@ import os
 import tempfile
 import shutil
 import traceback
+import datetime
 from enum import Enum
 from pathlib import Path
 
@@ -300,8 +301,87 @@ def _setup_worktree(
         cwd=repo_root,
     )
 
-    # Fixed branch naming to be feature branch instead of port prefix
-    new_branch_name = f"{jira_id}-{target_branch.replace('/', '_')}"
+    # Always prefix with feature/ and use the jira_id and target branch
+    base_branch_name = f"feature/{jira_id}-{target_branch.replace('/', '_')}"
+
+    # Check if branch already exists locally or remotely
+    branch_exists = False
+    try:
+        # Check if branch exists locally
+        local_branch_output = run_command(
+            ["git", "branch", "--list", base_branch_name], cwd=repo_root, check=False
+        )
+        if local_branch_output.strip():
+            branch_exists = True
+
+        # If not found locally, check if it exists remotely
+        if not branch_exists:
+            remote_branch_output = run_command(
+                ["git", "ls-remote", "--heads", "origin", base_branch_name],
+                cwd=repo_root,
+                check=False,
+            )
+            if remote_branch_output.strip():
+                branch_exists = True
+    except ShellCommandError:
+        # If commands fail, we'll assume the branch doesn't exist to be safe
+        branch_exists = False
+
+    new_branch_name = base_branch_name
+
+    if branch_exists:
+        console.print(
+            f"[bold yellow]Warning: Branch '{base_branch_name}' already exists![/]"
+        )
+
+        choice = Prompt.ask(
+            "[bold]Options:[/]\n"
+            "  [cyan]1[/] - Replace existing branch (delete and recreate)\n"
+            "  [cyan]2[/] - Create a new branch with unique suffix\n"
+            "  [cyan]3[/] - Abort operation",
+            choices=["1", "2", "3"],
+            default="2",
+        )
+
+        if choice == "1":
+            console.print(f"[bold]Replacing existing branch '{base_branch_name}'...[/]")
+            # Delete local branch if it exists
+            try:
+                run_command(
+                    ["git", "branch", "-D", base_branch_name],
+                    cwd=repo_root,
+                    check=False,
+                )
+            except ShellCommandError:
+                # Ignore errors if the branch doesn't exist locally
+                pass
+
+            # Continue with the original branch name
+            new_branch_name = base_branch_name
+
+        elif choice == "2":
+            # Create a unique branch name with timestamp
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+            new_branch_name = f"{base_branch_name}-{timestamp}"
+            console.print(
+                f"[bold]Creating new branch with unique name: '{new_branch_name}'[/]"
+            )
+
+        else:  # choice == "3"
+            console.print("[bold red]Operation aborted due to existing branch.[/]")
+            # Clean up the worktree we just created
+            try:
+                run_command(
+                    ["git", "worktree", "remove", "--force", str(worktree_path)],
+                    cwd=repo_root,
+                    check=False,
+                )
+                shutil.rmtree(worktree_path, ignore_errors=True)
+            except Exception:
+                # Best effort cleanup
+                pass
+            raise typer.Exit(code=1)
+
     console.print(f"[info]Creating new branch '{new_branch_name}' in worktree.[/info]")
     # Use switch instead of checkout, still using cwd parameter to avoid changing directory
     run_command(["git", "switch", "-c", new_branch_name], cwd=worktree_path)
