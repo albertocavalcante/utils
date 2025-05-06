@@ -578,6 +578,14 @@ def _apply_patch_and_handle_conflicts(
 ) -> PatchApplyStatus:
     """Applies the patch, handles conflicts, and returns a PatchApplyStatus."""
     console.print(f"[bold]Attempting to apply patch '{patch_file_path.name}'...[/]")
+
+    # Verify worktree exists before proceeding
+    if not worktree_path.exists():
+        console.print(
+            "[bold red]Error: Worktree directory not found. Cannot proceed with conflict resolution.[/]"
+        )
+        return PatchApplyStatus.ABORTED_CONFLICT
+
     try:
         # First, check if the patch can be applied cleanly
         run_command(
@@ -750,6 +758,16 @@ def _apply_patch_and_handle_conflicts(
                 return PatchApplyStatus.USER_WILL_RESOLVE
         elif choice == "3":
             # Open VS Code
+            console.print(
+                f"[bold]Attempting to open VS Code for conflicts in worktree:[/] {worktree_path}"
+            )
+            # Verify worktree still exists
+            if not worktree_path.exists():
+                console.print(
+                    "[bold red]Error: Worktree directory no longer exists![/]"
+                )
+                return PatchApplyStatus.ABORTED_CONFLICT
+
             if _open_external_editor(EditorType.VSCODE, worktree_path):
                 rprint(
                     Panel(
@@ -763,15 +781,25 @@ def _apply_patch_and_handle_conflicts(
                 # If opening failed, still show the guidance
                 rprint(
                     Panel(
-                        f"[yellow]Couldn't open VS Code automatically. Please open the worktree manually.[/]\n{guidance_message}",
+                        f"[yellow]Couldn't open VS Code automatically. Please open the worktree manually at:[/]\n[bold cyan]{worktree_path}[/]\n\n{guidance_message}",
                         title="[bold yellow]Manual Opening Required[/]",
                         border_style="yellow",
                         box=PANEL_BOX_STYLE,
                     )
                 )
-            return PatchApplyStatus.USING_EXTERNAL_TOOL
+            return PatchApplyStatus.USER_WILL_RESOLVE
         elif choice == "4":
             # Open IntelliJ IDEA
+            console.print(
+                f"[bold]Attempting to open IntelliJ IDEA for conflicts in worktree:[/] {worktree_path}"
+            )
+            # Verify worktree still exists
+            if not worktree_path.exists():
+                console.print(
+                    "[bold red]Error: Worktree directory no longer exists![/]"
+                )
+                return PatchApplyStatus.ABORTED_CONFLICT
+
             if _open_external_editor(EditorType.INTELLIJ, worktree_path):
                 rprint(
                     Panel(
@@ -785,13 +813,14 @@ def _apply_patch_and_handle_conflicts(
                 # If opening failed, still show the guidance
                 rprint(
                     Panel(
-                        f"[yellow]Couldn't open IntelliJ IDEA automatically. Please open the worktree manually.[/]\n{guidance_message}",
+                        f"[yellow]Couldn't open IntelliJ IDEA automatically. Please open the worktree manually at:[/]\n[bold cyan]{worktree_path}[/]\n\n{guidance_message}",
                         title="[bold yellow]Manual Opening Required[/]",
                         border_style="yellow",
                         box=PANEL_BOX_STYLE,
                     )
                 )
-            return PatchApplyStatus.USING_EXTERNAL_TOOL
+            # Return USER_WILL_RESOLVE instead of USING_EXTERNAL_TOOL to ensure proper cleanup logic
+            return PatchApplyStatus.USER_WILL_RESOLVE
         else:
             console.print("[bold red]Operation aborted due to conflicts.[/]")
             return PatchApplyStatus.ABORTED_CONFLICT
@@ -996,6 +1025,12 @@ def apply(
     # Initialize variables for cleanup in finally block
     op_details = None
     cleanup_worktree_on_exit = False
+    patch_status = None
+    worktree_path = None
+    keep_worktree = (
+        False  # New flag to track if worktree should be kept for manual resolution
+    )
+    status_context = None
 
     try:
         resolved_source_ref_name = _resolve_source_branch(source, repo_root_val)
@@ -1099,13 +1134,8 @@ def apply(
                 status_context,
             )
 
-            # Close the status indicator if it's still active
-            if status_context:
-                try:
-                    status_context.__exit__(None, None, None)
-                except Exception:
-                    pass
-                status_context = None
+            # Set reference to worktree path for cleanup in case of errors
+            worktree_path = op_details.temp_worktree_dir_path
 
             match patch_status:
                 case PatchApplyStatus.APPLIED_CLEANLY:
@@ -1122,11 +1152,10 @@ def apply(
                             box=PANEL_BOX_STYLE,
                         )
                     )
-                case (
-                    PatchApplyStatus.USER_WILL_RESOLVE
-                    | PatchApplyStatus.USING_EXTERNAL_TOOL
-                ):
+                case PatchApplyStatus.USER_WILL_RESOLVE:
+                    # User will resolve conflicts manually, don't clean up workdir
                     cleanup_worktree_on_exit = False
+                    keep_worktree = True  # Mark that worktree should be kept
                     console.print(
                         "[bold yellow]Worktree available for manual conflict resolution.[/]"
                     )
@@ -1198,27 +1227,40 @@ def apply(
         if Path.cwd() != original_dir:
             os.chdir(original_dir)
 
+        # Close the status indicator if it's still active
+        if status_context:
+            try:
+                status_context.__exit__(None, None, None)
+            except Exception:
+                pass
+
         # Check if we have details to clean up
-        if op_details is None:
-            # Don't use return in finally block - it can silence exceptions
+        if op_details is None and worktree_path is None:
+            # No details, nothing to clean up
             pass
         else:
-            # Cleanup worktree directory and git registration
-            if cleanup_worktree_on_exit and op_details.temp_worktree_dir_path.exists():
-                _cleanup_worktree(op_details.temp_worktree_dir_path, repo_root_val)
+            # Prioritize the direct worktree_path reference if available
+            actual_worktree_path = worktree_path or (
+                op_details.temp_worktree_dir_path if op_details else None
+            )
 
-            # After _cleanup_worktree, the directory might still exist if 'git worktree remove' failed or left files.
-            # Ensure the directory created by mkdtemp is removed.
-            if op_details.temp_worktree_dir_path.exists():
-                try:
-                    shutil.rmtree(op_details.temp_worktree_dir_path)
-                except Exception as e:
-                    console.print(
-                        f"[yellow]Warning: Could not fully delete worktree directory {op_details.temp_worktree_dir_path}: {e}. Manual cleanup may be required.[/]"
-                    )
+            if actual_worktree_path and not keep_worktree:
+                # Only cleanup if we're not keeping the worktree for manual resolution
+                if cleanup_worktree_on_exit and actual_worktree_path.exists():
+                    _cleanup_worktree(actual_worktree_path, repo_root_val)
+
+                # After _cleanup_worktree, the directory might still exist if 'git worktree remove' failed or left files.
+                # Ensure the directory created by mkdtemp is removed.
+                if actual_worktree_path.exists():
+                    try:
+                        shutil.rmtree(actual_worktree_path)
+                    except Exception as e:
+                        console.print(
+                            f"[yellow]Warning: Could not fully delete worktree directory {actual_worktree_path}: {e}. Manual cleanup may be required.[/]"
+                        )
 
             # Cleanup patch file
-            if op_details.patch_file_path.exists():
+            if op_details and op_details.patch_file_path.exists():
                 should_delete_patch = True
                 if patch_status == PatchApplyStatus.USER_WILL_RESOLVE:
                     should_delete_patch = False
