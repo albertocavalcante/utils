@@ -7,6 +7,8 @@
 # ]
 # ///
 
+from __future__ import annotations
+
 import subprocess
 import re
 import os
@@ -206,6 +208,7 @@ class PatchApplyStatus(Enum):
     USER_WILL_RESOLVE = "USER_WILL_RESOLVE"
     ABORTED_CONFLICT = "ABORTED_CONFLICT"
     NO_CHANGES = "NO_CHANGES"
+    USING_EXTERNAL_TOOL = "USING_EXTERNAL_TOOL"
 
 
 # --- Refactored Helper Functions for apply command ---
@@ -338,11 +341,31 @@ def _commit_and_push_changes(
             raise
 
 
+def _open_external_editor(editor: str, worktree_path: Path) -> None:
+    """Open an external editor for conflict resolution."""
+    try:
+        if editor == "code":
+            console.print(f"[info]Opening VS Code at {worktree_path}...[/info]")
+            run_command(["code", str(worktree_path)], check=False, cwd=worktree_path)
+        elif editor == "idea":
+            console.print(f"[info]Opening IntelliJ IDEA at {worktree_path}...[/info]")
+            run_command(["idea", str(worktree_path)], check=False, cwd=worktree_path)
+        console.print(
+            f"[green]{SUCCESS_SYMBOL} External editor opened. Resolve conflicts and then continue.[/]"
+        )
+    except ShellCommandError as e:
+        console.print(f"[bold red]Failed to open {editor}: {e}[/]")
+        console.print(
+            f"[yellow]You can manually open {worktree_path} in your editor.[/]"
+        )
+
+
 def _apply_patch_and_handle_conflicts(
     patch_file_path: Path,
     worktree_path: Path,
     final_commit_message: str,
     new_branch_in_worktree: str,
+    status_context=None,
 ) -> PatchApplyStatus:
     """Applies the patch, handles conflicts, and returns a PatchApplyStatus."""
     console.print(f"[bold]Attempting to apply patch '{patch_file_path.name}'...[/]")
@@ -357,6 +380,10 @@ def _apply_patch_and_handle_conflicts(
         console.print(f"[green]{SUCCESS_SYMBOL} Patch applied successfully.[/]")
         return PatchApplyStatus.APPLIED_CLEANLY
     except ShellCommandError:
+        # Pause the status indicator before showing the conflict panel
+        if status_context:
+            status_context.__exit__(None, None, None)
+
         rprint(
             Panel(
                 f"[bold red]{WARNING_SYMBOL} CONFLICTS DETECTED {WARNING_SYMBOL}[/]\nThe patch cannot be applied cleanly to the target branch.",
@@ -366,14 +393,28 @@ def _apply_patch_and_handle_conflicts(
                 box=PANEL_BOX_STYLE,
             )
         )
+
         choice = Prompt.ask(
             "[bold]Options:[/]\n"
             "  [cyan]1[/] - Apply with reject files (creates .rej files for conflicts)\n"
             "  [cyan]2[/] - Apply with 3-way merge (stops for manual conflict resolution if still conflicting)\n"
-            "  [cyan]3[/] - Abort operation",
-            choices=["1", "2", "3"],
-            default="3",
+            "  [cyan]3[/] - Open in VS Code for resolution\n"
+            "  [cyan]4[/] - Open in IntelliJ IDEA for resolution\n"
+            "  [cyan]5[/] - Abort operation",
+            choices=["1", "2", "3", "4", "5"],
+            default="2",
         )
+
+        # Show confirmation of selection
+        choice_descriptions = {
+            "1": "Apply with reject files",
+            "2": "Apply with 3-way merge",
+            "3": "Open in VS Code",
+            "4": "Open in IntelliJ IDEA",
+            "5": "Abort operation",
+        }
+        console.print(f"[bold green]Selected: {choice_descriptions[choice]}[/]")
+
         guidance_message = (
             f"Please navigate to [cyan]{worktree_path}[/] to resolve conflicts manually.\n"
             f"After resolving, run:\n"
@@ -400,21 +441,85 @@ def _apply_patch_and_handle_conflicts(
             return PatchApplyStatus.USER_WILL_RESOLVE
         elif choice == "2":
             console.print("[bold]Applying patch with --3way merge option...[/]")
-            run_command(
-                ["git", "apply", "--3way", str(patch_file_path)], cwd=worktree_path
-            )  # Does not stop, applies what it can
+            try:
+                run_command(
+                    ["git", "apply", "--3way", str(patch_file_path)], cwd=worktree_path
+                )
+                # Check if we still have conflicts
+                has_conflicts = False
+                try:
+                    result = run_command(
+                        ["git", "diff", "--name-only", "--diff-filter=U"],
+                        cwd=worktree_path,
+                        check=False,
+                    )
+                    has_conflicts = bool(result.strip())
+                except ShellCommandError:
+                    # If the command fails, assume there are conflicts
+                    has_conflicts = True
+
+                if has_conflicts:
+                    console.print(
+                        "[bold yellow]Conflicts detected after 3-way merge.[/]"
+                    )
+                    rprint(
+                        Panel(
+                            f"[yellow]Merge conflicts still present after 3-way merge.[/]\n{guidance_message}",
+                            title="[bold yellow]Manual Resolution Required[/]",
+                            border_style="yellow",
+                            box=PANEL_BOX_STYLE,
+                        )
+                    )
+                else:
+                    console.print("[green]3-way merge succeeded without conflicts![/]")
+
+                return PatchApplyStatus.USER_WILL_RESOLVE
+            except ShellCommandError as e:
+                console.print(f"[bold red]3-way merge failed: {e}[/]")
+                rprint(
+                    Panel(
+                        f"[bold red]3-way merge failed.[/]\n{guidance_message}",
+                        title="[bold red]Merge Failed[/]",
+                        border_style="red",
+                        box=PANEL_BOX_STYLE,
+                    )
+                )
+                return PatchApplyStatus.USER_WILL_RESOLVE
+        elif choice == "3":
+            # Open VS Code
+            _open_external_editor("code", worktree_path)
             rprint(
                 Panel(
-                    f"[yellow]Patch applied with 3-way merge attempt.[/]\n{guidance_message}",
-                    title="[bold yellow]Manual Resolution Required[/]",
-                    border_style="yellow",
+                    f"[cyan]VS Code has been opened for conflict resolution.[/]\n{guidance_message}",
+                    title="[bold cyan]VS Code Integration[/]",
+                    border_style="cyan",
                     box=PANEL_BOX_STYLE,
                 )
             )
-            return PatchApplyStatus.USER_WILL_RESOLVE
+            return PatchApplyStatus.USING_EXTERNAL_TOOL
+        elif choice == "4":
+            # Open IntelliJ IDEA
+            _open_external_editor("idea", worktree_path)
+            rprint(
+                Panel(
+                    f"[cyan]IntelliJ IDEA has been opened for conflict resolution.[/]\n{guidance_message}",
+                    title="[bold cyan]IntelliJ IDEA Integration[/]",
+                    border_style="cyan",
+                    box=PANEL_BOX_STYLE,
+                )
+            )
+            return PatchApplyStatus.USING_EXTERNAL_TOOL
         else:
             console.print("[bold red]Operation aborted due to conflicts.[/]")
             return PatchApplyStatus.ABORTED_CONFLICT
+    except Exception:  # No need to name the exception if we're not using it
+        # Handle any exceptions while processing
+        if status_context:
+            try:
+                status_context.__exit__(None, None, None)
+            except Exception:
+                pass
+        raise  # Re-raise the exception to be caught by the outer handlers
 
 
 def _prepare_operation_details(
@@ -683,9 +788,15 @@ def apply(
         new_branch_in_worktree = ""
         patch_status: PatchApplyStatus | None = None  # Initialize patch_status
 
-        with console.status(
-            f"[bold green]Processing changes for {target}...[/]", spinner="dots"
-        ):
+        # Store the status context so we can pause it during conflict resolution
+        status_context = None
+
+        try:
+            status_context = console.status(
+                f"[bold green]Processing changes for {target}...[/]", spinner="dots"
+            )
+            status_context.__enter__()
+
             new_branch_in_worktree = _setup_worktree(
                 target,
                 op_details.temp_worktree_dir_path,
@@ -702,7 +813,16 @@ def apply(
                 op_details.temp_worktree_dir_path,
                 op_details.final_commit_message,
                 new_branch_in_worktree,
+                status_context,
             )
+
+            # Close the status indicator if it's still active
+            if status_context:
+                try:
+                    status_context.__exit__(None, None, None)
+                except Exception:
+                    pass
+                status_context = None
 
             match patch_status:
                 case PatchApplyStatus.APPLIED_CLEANLY:
@@ -719,7 +839,10 @@ def apply(
                             box=PANEL_BOX_STYLE,
                         )
                     )
-                case PatchApplyStatus.USER_WILL_RESOLVE:
+                case (
+                    PatchApplyStatus.USER_WILL_RESOLVE
+                    | PatchApplyStatus.USING_EXTERNAL_TOOL
+                ):
                     cleanup_worktree_on_exit = False
                     console.print(
                         "[bold yellow]Worktree available for manual conflict resolution.[/]"
@@ -731,6 +854,14 @@ def apply(
                         "[bold red]Operation aborted by user choice due to conflicts.[/]"
                     )
                     raise typer.Exit(code=1)  # finally will run and clean up worktree
+        except Exception:  # No need to name the exception if we're not using it
+            # Handle any exceptions while processing
+            if status_context:
+                try:
+                    status_context.__exit__(None, None, None)
+                except Exception:
+                    pass
+            raise  # Re-raise the exception to be caught by the outer handlers
 
     except ShellCommandError as e:  # Catch our custom exception from run_command
         rprint(
