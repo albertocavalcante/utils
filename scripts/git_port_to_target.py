@@ -212,6 +212,24 @@ class PatchApplyStatus(Enum):
     USING_EXTERNAL_TOOL = "USING_EXTERNAL_TOOL"
 
 
+# Define Enum for supported external editors
+class EditorType(Enum):
+    VSCODE = "code"
+    INTELLIJ = "idea"
+
+    def command(self) -> str:
+        """Return the command to run for this editor."""
+        return self.value
+
+    def display_name(self) -> str:
+        """Return a user-friendly name for this editor."""
+        if self == EditorType.VSCODE:
+            return "VS Code"
+        elif self == EditorType.INTELLIJ:
+            return "IntelliJ IDEA"
+        return self.value
+
+
 # --- Refactored Helper Functions for apply command ---
 def _resolve_source_branch(source_arg: str | None, repo_root: Path) -> str:
     if source_arg:
@@ -289,17 +307,67 @@ def _setup_worktree(
             )
             raise typer.Exit(code=1)
 
-    run_command(
-        [
-            "git",
-            "worktree",
-            "add",
-            "--force",
-            str(worktree_path),
-            target_branch,
-        ],  # --force for git's tracking
-        cwd=repo_root,
-    )
+    # Make sure target_branch exists at origin before creating worktree
+    try:
+        # Fetch latest from remote to ensure we have the latest branches
+        run_command(
+            ["git", "fetch", "origin", target_branch], cwd=repo_root, check=False
+        )
+    except ShellCommandError:
+        console.print(
+            f"[yellow]Warning: Could not fetch latest for branch '{target_branch}' from origin.[/]"
+        )
+
+    # Create the worktree - make sure to use the proper remote branch reference if needed
+    if target_branch.startswith("origin/"):
+        # If it's a remote branch, we need to ensure it's up to date
+        branch_ref = target_branch
+    else:
+        # Try to use the remote branch first, fall back to local if needed
+        try:
+            run_command(
+                ["git", "rev-parse", f"origin/{target_branch}"],
+                cwd=repo_root,
+                check=False,
+            )
+            branch_ref = f"origin/{target_branch}"
+            console.print(f"[info]Using remote branch reference '{branch_ref}'[/info]")
+        except ShellCommandError:
+            branch_ref = target_branch
+            console.print(f"[info]Using local branch reference '{branch_ref}'[/info]")
+
+    console.print(f"[info]Creating worktree using '{branch_ref}'...[/info]")
+    try:
+        run_command(
+            ["git", "worktree", "add", "--force", str(worktree_path), branch_ref],
+            cwd=repo_root,
+        )
+    except ShellCommandError as e:
+        console.print(f"[bold red]Failed to create worktree: {e}[/]")
+        raise typer.Exit(code=1)
+
+    # Verify the worktree was created and populated correctly
+    if not worktree_path.exists():
+        console.print(
+            "[bold red]Error: Worktree directory was not created properly.[/]"
+        )
+        raise typer.Exit(code=1)
+
+    # Check if the worktree has files in it
+    files_in_worktree = list(worktree_path.glob("*"))
+    if not files_in_worktree:
+        console.print(
+            "[bold red]Error: Worktree directory is empty. Files weren't copied.[/]"
+        )
+        # Try running git status to get more info
+        try:
+            status_output = run_command(
+                ["git", "status"], cwd=worktree_path, check=False
+            )
+            console.print(f"[yellow]Git status in worktree: {status_output}[/]")
+        except Exception:
+            pass
+        raise typer.Exit(code=1)
 
     # Always prefix with feature/ and use the jira_id and target branch
     base_branch_name = f"feature/{jira_id}-{target_branch.replace('/', '_')}"
@@ -383,8 +451,36 @@ def _setup_worktree(
             raise typer.Exit(code=1)
 
     console.print(f"[info]Creating new branch '{new_branch_name}' in worktree.[/info]")
-    # Use switch instead of checkout, still using cwd parameter to avoid changing directory
-    run_command(["git", "switch", "-c", new_branch_name], cwd=worktree_path)
+
+    # Use git switch -c instead of checkout for better alignment with modern git
+    try:
+        run_command(["git", "switch", "-c", new_branch_name], cwd=worktree_path)
+    except ShellCommandError as e:
+        # If branch creation fails (like if branch exists), try again with a unique name
+        if "already exists" in str(e):
+            console.print(
+                "[yellow]Branch already exists despite our checks. Creating a unique branch name...[/]"
+            )
+            timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+            new_branch_name = f"{base_branch_name}-{timestamp}"
+            console.print(
+                f"[info]Trying again with unique name: '{new_branch_name}'[/info]"
+            )
+            run_command(["git", "switch", "-c", new_branch_name], cwd=worktree_path)
+        else:
+            raise
+
+    # Verify the branch was created correctly
+    current_branch = run_command(["git", "branch", "--show-current"], cwd=worktree_path)
+    if current_branch.strip() != new_branch_name:
+        console.print(
+            f"[bold red]Error: Failed to switch to new branch. Currently on '{current_branch}'[/]"
+        )
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[green]{SUCCESS_SYMBOL} Successfully set up worktree with new branch '{new_branch_name}'[/]"
+    )
     return new_branch_name
 
 
@@ -421,23 +517,56 @@ def _commit_and_push_changes(
             raise
 
 
-def _open_external_editor(editor: str, worktree_path: Path) -> None:
-    """Open an external editor for conflict resolution."""
+def _open_external_editor(editor: EditorType, worktree_path: Path) -> bool:
+    """Open an external editor for conflict resolution. Returns True if successful."""
+    editor_opened = False
+
     try:
-        if editor == "code":
-            console.print(f"[info]Opening VS Code at {worktree_path}...[/info]")
-            run_command(["code", str(worktree_path)], check=False, cwd=worktree_path)
-        elif editor == "idea":
-            console.print(f"[info]Opening IntelliJ IDEA at {worktree_path}...[/info]")
-            run_command(["idea", str(worktree_path)], check=False, cwd=worktree_path)
         console.print(
-            f"[green]{SUCCESS_SYMBOL} External editor opened. Resolve conflicts and then continue.[/]"
+            f"[info]Opening {editor.display_name()} at {worktree_path}...[/info]"
         )
-    except ShellCommandError as e:
-        console.print(f"[bold red]Failed to open {editor}: {e}[/]")
+
+        cmd = [editor.command(), str(worktree_path)]
+
+        # Note: For VSCode, the --wait flag can be added to make the command wait until
+        # the editor is closed. This isn't needed for our use case where we want the user
+        # to continue working in the editor after the script completes.
+        # If editor == EditorType.VSCODE:
+        #     cmd.append("--wait")
+
+        # Just use the command directly as it exists in the user's terminal
+        run_command(cmd, check=False, cwd=worktree_path)
+        editor_opened = True
+
+        if editor_opened:
+            console.print(
+                f"[green]{SUCCESS_SYMBOL} {editor.display_name()} opened. Resolve conflicts and then continue.[/]"
+            )
+            return True
+        else:
+            raise Exception(f"Could not find or open {editor.display_name()}")
+
+    except Exception as e:
+        console.print(f"[bold red]Failed to open {editor.display_name()}: {e}[/]")
         console.print(
             f"[yellow]You can manually open {worktree_path} in your editor.[/]"
         )
+
+        # Display help for terminal command issues
+        if os.name == "nt":
+            console.print(
+                f"[bold yellow]Note:[/] If you use an alias or doskey for {editor.command()}, the script might not see it.\n"
+                f"Try manually opening {editor.display_name()} by running these commands in a new terminal window:\n"
+                f"  [cyan]cd {worktree_path}[/]\n"
+                f"  [cyan]{editor.command()} .[/]"
+            )
+        else:
+            console.print(
+                f"[bold yellow]Note:[/] If you normally use an alias for {editor.command()}, try:\n"
+                f"  [cyan]cd {worktree_path} && {editor.command()} .[/]"
+            )
+
+        return False
 
 
 def _apply_patch_and_handle_conflicts(
@@ -460,6 +589,33 @@ def _apply_patch_and_handle_conflicts(
         console.print(f"[green]{SUCCESS_SYMBOL} Patch applied successfully.[/]")
         return PatchApplyStatus.APPLIED_CLEANLY
     except ShellCommandError:
+        # Try to apply with 3-way merge to get conflicts into the worktree
+        # This ensures the worktree is in a conflict state before showing options
+        try:
+            console.print(
+                "[info]Attempting to apply with 3-way merge to show conflicts...[/info]"
+            )
+            run_command(
+                ["git", "apply", "--3way", str(patch_file_path)],
+                cwd=worktree_path,
+                check=False,  # Don't fail if conflicts occur
+            )
+
+            # Check if we have conflicts now
+            conflict_files = run_command(
+                ["git", "diff", "--name-only", "--diff-filter=U"],
+                cwd=worktree_path,
+                check=False,
+            ).strip()
+
+            if conflict_files:
+                console.print("[yellow]Conflicts detected in the following files:[/]")
+                for file in conflict_files.split("\n"):
+                    console.print(f"  - [cyan]{file}[/]")
+
+        except Exception as e:
+            console.print(f"[yellow]Note: Could not pre-apply conflicts: {e}[/]")
+
         # Pause the status indicator before showing the conflict panel
         if status_context:
             status_context.__exit__(None, None, None)
@@ -474,25 +630,44 @@ def _apply_patch_and_handle_conflicts(
             )
         )
 
+        # Create a more appealing menu with better descriptions
+        console.print("\n[bold]Please select how you want to handle the conflicts:[/]")
+
+        options = [
+            (
+                "1",
+                "Apply with reject files",
+                "Creates .rej files for conflicts that you can review later",
+            ),
+            (
+                "2",
+                "Apply with 3-way merge",
+                "Uses Git's 3-way merge to show conflicts in files",
+            ),
+            (
+                "3",
+                "Open in VS Code",
+                "Open the worktree in VS Code to resolve conflicts",
+            ),
+            (
+                "4",
+                "Open in IntelliJ IDEA",
+                "Open the worktree in IntelliJ IDEA to resolve conflicts",
+            ),
+            ("5", "Abort operation", "Cancel the operation completely"),
+        ]
+
+        for opt, title, desc in options:
+            console.print(f"  [cyan]{opt}[/] - [bold]{title}[/]: {desc}")
+
         choice = Prompt.ask(
-            "[bold]Options:[/]\n"
-            "  [cyan]1[/] - Apply with reject files (creates .rej files for conflicts)\n"
-            "  [cyan]2[/] - Apply with 3-way merge (stops for manual conflict resolution if still conflicting)\n"
-            "  [cyan]3[/] - Open in VS Code for resolution\n"
-            "  [cyan]4[/] - Open in IntelliJ IDEA for resolution\n"
-            "  [cyan]5[/] - Abort operation",
+            "\n[bold]Choose an option[/]",
             choices=["1", "2", "3", "4", "5"],
             default="2",
         )
 
         # Show confirmation of selection
-        choice_descriptions = {
-            "1": "Apply with reject files",
-            "2": "Apply with 3-way merge",
-            "3": "Open in VS Code",
-            "4": "Open in IntelliJ IDEA",
-            "5": "Abort operation",
-        }
+        choice_descriptions = {opt: title for opt, title, _ in options}
         console.print(f"[bold green]Selected: {choice_descriptions[choice]}[/]")
 
         guidance_message = (
@@ -522,6 +697,7 @@ def _apply_patch_and_handle_conflicts(
         elif choice == "2":
             console.print("[bold]Applying patch with --3way merge option...[/]")
             try:
+                # We may have already applied it above in the pre-check, but run again to be sure
                 run_command(
                     ["git", "apply", "--3way", str(patch_file_path)], cwd=worktree_path
                 )
@@ -533,15 +709,22 @@ def _apply_patch_and_handle_conflicts(
                         cwd=worktree_path,
                         check=False,
                     )
-                    has_conflicts = bool(result.strip())
+                    conflicted_files = (
+                        result.strip().split("\n") if result.strip() else []
+                    )
+                    has_conflicts = bool(conflicted_files)
+
+                    if has_conflicts:
+                        console.print(
+                            "[bold yellow]Conflicts detected after 3-way merge:[/]"
+                        )
+                        for file in conflicted_files:
+                            console.print(f"  - [cyan]{file}[/]")
                 except ShellCommandError:
                     # If the command fails, assume there are conflicts
                     has_conflicts = True
 
                 if has_conflicts:
-                    console.print(
-                        "[bold yellow]Conflicts detected after 3-way merge.[/]"
-                    )
                     rprint(
                         Panel(
                             f"[yellow]Merge conflicts still present after 3-way merge.[/]\n{guidance_message}",
@@ -567,27 +750,47 @@ def _apply_patch_and_handle_conflicts(
                 return PatchApplyStatus.USER_WILL_RESOLVE
         elif choice == "3":
             # Open VS Code
-            _open_external_editor("code", worktree_path)
-            rprint(
-                Panel(
-                    f"[cyan]VS Code has been opened for conflict resolution.[/]\n{guidance_message}",
-                    title="[bold cyan]VS Code Integration[/]",
-                    border_style="cyan",
-                    box=PANEL_BOX_STYLE,
+            if _open_external_editor(EditorType.VSCODE, worktree_path):
+                rprint(
+                    Panel(
+                        f"[cyan]VS Code has been opened for conflict resolution.[/]\n{guidance_message}",
+                        title="[bold cyan]VS Code Integration[/]",
+                        border_style="cyan",
+                        box=PANEL_BOX_STYLE,
+                    )
                 )
-            )
+            else:
+                # If opening failed, still show the guidance
+                rprint(
+                    Panel(
+                        f"[yellow]Couldn't open VS Code automatically. Please open the worktree manually.[/]\n{guidance_message}",
+                        title="[bold yellow]Manual Opening Required[/]",
+                        border_style="yellow",
+                        box=PANEL_BOX_STYLE,
+                    )
+                )
             return PatchApplyStatus.USING_EXTERNAL_TOOL
         elif choice == "4":
             # Open IntelliJ IDEA
-            _open_external_editor("idea", worktree_path)
-            rprint(
-                Panel(
-                    f"[cyan]IntelliJ IDEA has been opened for conflict resolution.[/]\n{guidance_message}",
-                    title="[bold cyan]IntelliJ IDEA Integration[/]",
-                    border_style="cyan",
-                    box=PANEL_BOX_STYLE,
+            if _open_external_editor(EditorType.INTELLIJ, worktree_path):
+                rprint(
+                    Panel(
+                        f"[cyan]IntelliJ IDEA has been opened for conflict resolution.[/]\n{guidance_message}",
+                        title="[bold cyan]IntelliJ IDEA Integration[/]",
+                        border_style="cyan",
+                        box=PANEL_BOX_STYLE,
+                    )
                 )
-            )
+            else:
+                # If opening failed, still show the guidance
+                rprint(
+                    Panel(
+                        f"[yellow]Couldn't open IntelliJ IDEA automatically. Please open the worktree manually.[/]\n{guidance_message}",
+                        title="[bold yellow]Manual Opening Required[/]",
+                        border_style="yellow",
+                        box=PANEL_BOX_STYLE,
+                    )
+                )
             return PatchApplyStatus.USING_EXTERNAL_TOOL
         else:
             console.print("[bold red]Operation aborted due to conflicts.[/]")
