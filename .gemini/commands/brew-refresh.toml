@@ -1,0 +1,2 @@
+description = "Syncs the Brewfile with installed packages and commits the changes."
+prompt = "!{cat .agent/workflows/brew-refresh.md}"

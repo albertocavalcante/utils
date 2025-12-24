@@ -10,3 +10,10 @@ This repository serves as a central hub for development utilities, scripts, and 
 
 ## Canonical Reference
 For system setup, Homebrew packages, and shell aliases, refer to the `dotfiles/` repository instructions.
+
+## Agent Slash Commands
+
+### `/brew-refresh`
+Triggers the **Update Brewfile** workflow.
+- **Source of Truth**: The detailed steps are defined in `.gemini/commands/brew-refresh.toml`.
+- **Usage**: Invoke this command to capture the current system state, update the `Brewfile`, and commit changes to the `dotfiles` submodule.
