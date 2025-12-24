@@ -1,8 +1,0 @@
-# Packages listed here will be IGNORED by the 'capture' command.
-# They will NOT be added to your shared Brewfile.
-# This is useful for temporary tools, experiments, or machine-specific drivers.
-# Format: exact match or simple regex
-
-# Examples:
-# experiment-tool
-# old-python-version
