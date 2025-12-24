@@ -1,1 +1,2 @@
-*.zip.gemini-clipboard/
+*.zip
+.gemini-clipboard/
