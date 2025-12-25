@@ -1,2 +1,5 @@
 *.zip
 .gemini-clipboard/
+
+# BFG Repo-Cleaner reports
+*.bfg-report/
