@@ -12,7 +12,7 @@ sudo apt update
 sudo apt install fish
 ```
 
-**Source:** *https://launchpad.net/~fish-shell/+archive/ubuntu/release-3*
+**Source:** _https://launchpad.net/~fish-shell/+archive/ubuntu/release-3_
 
 ## Configuration
 
@@ -29,6 +29,7 @@ vim ~/.config/fish/fish_variables
 ```
 
 ## Configuration Template
+
 - [config.fish.sh](./config.fish.sh)
 
 ### Utilities
@@ -39,7 +40,9 @@ vim ~/.config/fish/fish_variables
 fish_remove_path /opt/gradle/gradle-7.6/bin
 ```
 
-**Source:** *https://github.com/fish-shell/fish-shell/issues/8604#issuecomment-1169638533*
+**Source:**
+_https://github.com/fish-shell/fish-shell/issues/8604#issuecomment-1169638533_
 
 ## StackOverflow Questions
+
 - [Cannot understand command substitution in Fish Shell](https://stackoverflow.com/questions/3281220/cannot-understand-command-substitution-in-fish-shell)

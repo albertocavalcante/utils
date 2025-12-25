@@ -1,6 +1,7 @@
 # SWE-agent
 
-SWE-agent is an AI coding assistant that can solve software engineering tasks by interacting with code repositories.
+SWE-agent is an AI coding assistant that can solve software engineering tasks by
+interacting with code repositories.
 
 ## Installation
 
@@ -9,7 +10,8 @@ git clone https://github.com/SWE-agent/SWE-agent.git && cd SWE-agent && uv pip i
 ```
 
 > [!IMPORTANT]
-> Use the full repository clone instead of `uv tool install` as SWE-agent requires config files that are only available in the full repository.
+> Use the full repository clone instead of `uv tool install` as SWE-agent
+> requires config files that are only available in the full repository.
 
 After installation, verify with:
 
@@ -20,4 +22,4 @@ sweagent --help
 ## Resources
 
 - [Official Documentation](https://swe-agent.com/latest/installation/source/)
-- [GitHub Repository](https://github.com/SWE-agent/SWE-agent) 
+- [GitHub Repository](https://github.com/SWE-agent/SWE-agent)

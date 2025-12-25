@@ -6,7 +6,8 @@ This directory contains utility scripts for various tasks.
 
 ### github_tag_filter.py
 
-A utility script to fetch and filter tags from any GitHub repository. It allows filtering tags by version patterns and displays results in a formatted table.
+A utility script to fetch and filter tags from any GitHub repository. It allows
+filtering tags by version patterns and displays results in a formatted table.
 
 To run using uv:
 
@@ -36,4 +37,6 @@ uv run github_tag_filter.py bazelbuild/bazel --no-urls
 uv run github_tag_filter.py bazelbuild/bazel --tarball
 ```
 
-By default, the script shows GitHub release URLs. Use the `--no-urls` flag to hide URLs completely, or the `--tarball` flag to show tarball URLs instead of release URLs.
+By default, the script shows GitHub release URLs. Use the `--no-urls` flag to
+hide URLs completely, or the `--tarball` flag to show tarball URLs instead of
+release URLs.

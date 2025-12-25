@@ -4,7 +4,13 @@
 pre-commit:
   parallel: true
   commands:
+    # Format check
+    dprint:
+      glob: "*.{md,json}"
+      run: dprint check {staged_files}
+
     # Lint shell scripts
     shellcheck:
       glob: "*.sh"
       run: shellcheck {staged_files}
+

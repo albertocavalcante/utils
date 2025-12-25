@@ -1,10 +1,13 @@
 # Bazel on Windows
 
-This is a dump of some bugs / errors and troubleshooting I've been doing when executing Bazel on Windows.
+This is a dump of some bugs / errors and troubleshooting I've been doing when
+executing Bazel on Windows.
 
 ## rules_go
 
-> Some the issues below would have been avoided if I had read [Using rules_go on Windows](https://github.com/bazelbuild/rules_go/blob/master/windows.rst) before.
+> Some the issues below would have been avoided if I had read
+> [Using rules_go on Windows](https://github.com/bazelbuild/rules_go/blob/master/windows.rst)
+> before.
 
 command:
 
@@ -20,7 +23,8 @@ Bazel couldn't find gcc installation on your machine.
 Please install MSYS gcc / MINGW gcc and set BAZEL_SH environment variable
 ```
 
-Then I had to install MinGW, through MSYS2. For reference, check [MinGW](/environment/software/mingw/) and [MSYS2](/environment/software/msys2/).
+Then I had to install MinGW, through MSYS2. For reference, check
+[MinGW](/environment/software/mingw/) and [MSYS2](/environment/software/msys2/).
 
 Once they've been installed I did set:
 
@@ -28,7 +32,7 @@ Once they've been installed I did set:
 set BAZEL_SH=C:\msys64\usr\bin\bash.exe
 ```
 
-It happens that I only had `gcc` installed in 
+It happens that I only had `gcc` installed in
 
 So then I got the error
 
@@ -39,7 +43,9 @@ c:\msys64\mingw64\bin\gcc -MD -MF bazel-out/x64_windows-fastbuild/bin/tests/core
 Action failed to execute: java.io.IOException: ERROR: src/main/native/windows/process.cc(202): CreateProcessW("c:\msys64\mingw64\bin\gcc" -MD -MF bazel-out/x64_windows-fastbuild/bin/tests/core/cgo/_objs/split_import_c/split_import_c.d -frandom-seed=bazel-out/x64_windows-fastbuild/bin/tests/core/cgo/_objs/split_import_c/split_import_c.o -iquote . -iquote bazel-out/x64_windows-fastbuild/bin -c tests/core/cgo/split_import_c.c -o bazel-out/x64_windows-fastbuild/bin/tests/core/cgo/_objs/split_import_c/split_import_c.o): O sistema não pode encontrar o arquivo especificado.
 ```
 
-It attempted to use `gcc` ìn the `C:\msys64\mingw\bin` directory. Nowadays `MSYS2` advises to install the `ucrt` flavor of `MinGW`, but it ends up having gcc only at `C:\msys64\ucrt64\bin` and not in `C:\msys64\mingw64\bin`
+It attempted to use `gcc` ìn the `C:\msys64\mingw\bin` directory. Nowadays
+`MSYS2` advises to install the `ucrt` flavor of `MinGW`, but it ends up having
+gcc only at `C:\msys64\ucrt64\bin` and not in `C:\msys64\mingw64\bin`
 
 In order to install the `mingw` flavor I executed:
 
@@ -56,7 +62,8 @@ tests/legacy/examples/cgo/cc_dependency/cxx_version.cc:1:10: fatal error: dlfcn.
 compilation terminated.
 ```
 
-Then I installed the package [`mingw-w64-x86_64-dlfcn`](https://packages.msys2.org/package/mingw-w64-x86_64-dlfcn).
+Then I installed the package
+[`mingw-w64-x86_64-dlfcn`](https://packages.msys2.org/package/mingw-w64-x86_64-dlfcn).
 
 ```sh
 pacman -S mingw-w64-x86_64-dlfcn
@@ -69,8 +76,12 @@ c:/msys64/mingw64/bin/../lib/gcc/x86_64-w64-mingw32/13.2.0/../../../../x86_64-w6
 collect2.exe: error: ld returned 1 exit status
 ```
 
-It took me a while until I [searched for `c_version_go` on GitHub](https://github.com/search?type=code&q=c_version_so) and found a [match in the `rules_go` repository](https://github.com/bazelbuild/rules_go/blob/master/.bazelci/presubmit.yml#L259).
-Then I realized I had to exclude some targets that wouldn't be possible to compile on Windows.
+It took me a while until I
+[searched for `c_version_go` on GitHub](https://github.com/search?type=code&q=c_version_so)
+and found a
+[match in the `rules_go` repository](https://github.com/bazelbuild/rules_go/blob/master/.bazelci/presubmit.yml#L259).
+Then I realized I had to exclude some targets that wouldn't be possible to
+compile on Windows.
 
 I ended up with:
 
@@ -85,7 +96,8 @@ ERROR: C:/dev/workspace/rules_go/tests/core/go_test/BUILD.bazel:74:8: output 'te
 ERROR: C:/dev/workspace/rules_go/tests/core/go_test/BUILD.bazel:74:8: GoLink tests/core/go_test/only_testmain_test_/only_testmain_test.exe failed: not all outputs were created or valid
 ```
 
-I tried to run the target individually to isolate the error and got the same output:
+I tried to run the target individually to isolate the error and got the same
+output:
 
 ```sh
 bazel build //tests/core/go_test:only_testmain_test --verbose_failures
@@ -98,9 +110,9 @@ INFO: 2 processes: 1 internal, 1 local.
 ERROR: Build did NOT complete successfully
 ```
 
-Then... every time I executed this action, a Windows Security pop up appeared informing it had blocked a suspicius file. I had to manually allow this file and built again.
-Then it succeeded.
-
+Then... every time I executed this action, a Windows Security pop up appeared
+informing it had blocked a suspicius file. I had to manually allow this file and
+built again. Then it succeeded.
 
 ### Additional Resources
 

@@ -1,4 +1,4 @@
 # Windows Terminal
 
-> [!NOTE]  
+> [!NOTE]\
 > [Documentation](https://learn.microsoft.com/en-us/windows/terminal/)

@@ -11,6 +11,7 @@ uv tool install --from git+https://github.com/SWE-agent/SWE-agent.git sweagent
 ```
 
 > [!NOTE]
-> This command currently doesn't work due to missing config files. See [SWE-agent docs](../docs/swe-agent/) for working installation.
+> This command currently doesn't work due to missing config files. See
+> [SWE-agent docs](../docs/swe-agent/) for working installation.
 
 [source](https://swe-agent.com/latest/installation/source/)

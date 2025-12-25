@@ -1,8 +1,8 @@
 {
-    "recommendations": [
-        "GitHub.copilot",
-        "GitHub.copilot-chat",
-        "editorconfig.editorconfig",
-        "eamodio.gitlens",
-    ]
+  "recommendations": [
+    "GitHub.copilot",
+    "GitHub.copilot-chat",
+    "editorconfig.editorconfig",
+    "eamodio.gitlens"
+  ]
 }

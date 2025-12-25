@@ -2,7 +2,8 @@
 
 ## Settings Hyperlinks
 
-You must copy and paste these direct references in a new browser tab (href is not working 😔).
+You must copy and paste these direct references in a new browser tab (href is
+not working 😔).
 
 ### About
 

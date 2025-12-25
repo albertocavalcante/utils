@@ -10,7 +10,6 @@
 - [Python](./python/)
 - [Zig](./zig/)
 
-
 ## Edit Fish Shell Configuration
 
 ```sh

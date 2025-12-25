@@ -3,7 +3,9 @@
 - [MSYS2 Installer Source Code](https://github.com/msys2/msys2-installer)
 - [Configuration for 3rd party Terminals, including Windows Terminal](https://www.msys2.org/docs/terminals/)
 
-On my machine using WinGet did not work with the message `Installation space required: "521.74 MB" Temporary space required: "256.00 MB" Local repository size: "0.00 bytes"`. I ended up invoking the `.exe` and installing through the GUI.
+On my machine using WinGet did not work with the message
+`Installation space required: "521.74 MB" Temporary space required: "256.00 MB" Local repository size: "0.00 bytes"`.
+I ended up invoking the `.exe` and installing through the GUI.
 
 ## Manual
 

@@ -2,9 +2,11 @@
 
 ## About
 
-`install-go.sh` is a utility bash script that install Go on Linux. It has been tested only on WSL2 Ubuntu.
+`install-go.sh` is a utility bash script that install Go on Linux. It has been
+tested only on WSL2 Ubuntu.
 
-It will add a new folder at `/usr/local`, containing the Go release version specified (e.g. `/usr/local/go1.22`).
+It will add a new folder at `/usr/local`, containing the Go release version
+specified (e.g. `/usr/local/go1.22`).
 
 After installing it, you need to update your `PATH` accordingly.
 
@@ -24,7 +26,8 @@ Reload Fish Shell
 source ~/.config/fish/config.fish
 ```
 
-On my `config.fish` I have the following lines to set both `GOROOT` and add it to the `PATH`:
+On my `config.fish` I have the following lines to set both `GOROOT` and add it
+to the `PATH`:
 
 ```sh
 export GOROOT=/usr/local/go-1.22
