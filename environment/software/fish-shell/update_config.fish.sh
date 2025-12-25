@@ -1,2 +1,3 @@
-cat ~/.config/fish/config.fish > config.fish.sh
+#!/bin/bash
+cat ~/.config/fish/config.fish > config.fish
 

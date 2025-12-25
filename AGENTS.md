@@ -12,6 +12,9 @@ This repository serves as a central hub for development utilities, scripts, and 
 ## Canonical Reference
 For system setup, Homebrew packages, and shell aliases, refer to the `dotfiles/` repository instructions.
 
+## Development
+Refer to [CONTRIBUTING.md](./CONTRIBUTING.md) for environment setup, git hooks, and linting rules.
+
 ## Agent Slash Commands
 
 ### `/brew-refresh`

@@ -1,0 +1,10 @@
+# .shellcheckrc
+# Configuration for ShellCheck
+
+# Suggestions and warnings
+suggest=true
+# Enable optional checks
+enable=all
+
+# Shell to use (default is auto-detect, but bash is common)
+shell=bash

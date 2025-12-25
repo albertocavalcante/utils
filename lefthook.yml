@@ -1,0 +1,10 @@
+# --- Lefthook Configuration ---
+# See: https://github.com/evilmartians/lefthook
+
+pre-commit:
+  parallel: true
+  commands:
+    # Lint shell scripts
+    shellcheck:
+      glob: "*.sh"
+      run: shellcheck {staged_files}
