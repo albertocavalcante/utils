@@ -14,3 +14,11 @@ pre-commit:
       glob: "*.sh"
       run: shellcheck {staged_files}
 
+    # Secret Scanning
+    gitleaks:
+      run: gitleaks protect --staged --verbose --redact
+
+    # Object Integrity (Custom Policy)
+    integrity_check:
+      run: ./dotfiles/private/scripts/git/object_integrity.py
+
