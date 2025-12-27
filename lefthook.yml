@@ -20,5 +20,5 @@ pre-commit:
 
     # Object Integrity (Custom Policy)
     integrity_check:
-      run: ./dotfiles/private/scripts/git/object_integrity.py
+      run: ./dotfiles/private/scripts/git/sanity_check.sh
 
