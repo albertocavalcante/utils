@@ -11,6 +11,8 @@ documentation. System-level environment configurations are externalized in the
 - **Security First**: Security is Priority #1. Always question whether a file,
   config, or secret belongs in the public `dotfiles` or the `dotfiles-private`
   submodule before proceeding.
+- **Protocol Inheritance**: Always consult `dotfiles/private/AGENTS.md` for
+  extended operational protocols regarding compliance and data handling.
 - **Environment Config**: All terminal, shell, and editor configurations must be
   modified within the `dotfiles/` submodule. Do not create or edit local
   configuration files in the root of this repository.
