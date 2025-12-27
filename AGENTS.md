@@ -42,5 +42,8 @@ Triggers the **Update Brewfile** workflow.
 
 - **Source of Truth**: The detailed steps are defined in
   `.gemini/commands/brew-refresh.toml`.
+- **Operational Protocol**: Refer to the **Package Management** section in
+  `dotfiles/AGENTS.md` for details on how `brew-manager.sh` is used to capture
+  and audit system state.
 - **Usage**: Invoke this command to capture the current system state, update the
   `Brewfile`, and commit changes to the `dotfiles` submodule.
