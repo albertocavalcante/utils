@@ -15,10 +15,9 @@ documentation. System-level environment configurations are externalized in the
   extended operational protocols regarding compliance and data handling.
 - **Environment Config**: All terminal, shell, and editor configurations must be
   modified within the `dotfiles/` submodule. Do not create or edit local
-  configuration files in the root of this repository.
-- **Submodule Sync**: After making changes within `dotfiles/`, ensure the
-  submodule pointer in this repository is updated and committed to maintain
-  parity.
+  configuration files in the root of this repository.- **Submodule Sync**: After
+  making changes within `dotfiles/`, ensure the submodule pointer in this
+  repository is updated and committed to maintain parity.
 - **Stow Update**: After modifying configuration files in `dotfiles/` (e.g.,
   .zshrc, .config/...), run `cd dotfiles && stow -R <package_name>` to refresh
   symlinks (e.g., `stow -R zsh`).
