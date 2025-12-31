@@ -29,6 +29,91 @@ GEMINI_MAP = {
     "tools": {"edit": "edit_file|write_file|smart_edit", "bash": "run_shell_command"}
 }
 
+# --- Constants ---
+
+# Source: https://code.claude.com/docs/en/settings
+# Alternative (Reader mode): https://r.jina.ai/code.claude.com/docs/en/settings
+KNOWN_CLAUDE_ENV_VARS = {
+    # Authentication & API
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "ANTHROPIC_FOUNDRY_API_KEY",
+    "AWS_BEARER_TOKEN_BEDROCK",
+    "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+    "CLAUDE_CODE_CLIENT_CERT",
+    "CLAUDE_CODE_CLIENT_KEY",
+    "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
+    
+    # Model Selection & Configuration
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL", # Deprecated but known
+    "ANTHROPIC_SMALL_FAST_MODEL_AWS_REGION",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_SKIP_BEDROCK_AUTH",
+    "CLAUDE_CODE_SKIP_FOUNDRY_AUTH",
+    "CLAUDE_CODE_SKIP_VERTEX_AUTH",
+    "VERTEX_REGION_CLAUDE_3_5_HAIKU",
+    "VERTEX_REGION_CLAUDE_3_7_SONNET",
+    "VERTEX_REGION_CLAUDE_4_0_OPUS",
+    "VERTEX_REGION_CLAUDE_4_0_SONNET",
+    "VERTEX_REGION_CLAUDE_4_1_OPUS",
+
+    # Network & Proxy
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+    
+    # Bash & Shell Behavior
+    "BASH_DEFAULT_TIMEOUT_MS",
+    "BASH_MAX_OUTPUT_LENGTH",
+    "BASH_MAX_TIMEOUT_MS",
+    "CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR",
+    "CLAUDE_ENV_FILE",
+    "CLAUDE_CODE_SHELL_PREFIX",
+    "SHELL",
+    "EDITOR",
+    "VISUAL",
+
+    # System & Configuration
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_LOG_LEVEL",
+    "CLAUDE_DEBUG",
+    "CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL",
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE",
+    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+    "CLAUDE_CODE_OTEL_HEADERS_HELPER_DEBOUNCE_MS",
+    "MAX_MCP_OUTPUT_TOKENS",
+    "MAX_THINKING_TOKENS",
+    "MCP_TIMEOUT",
+    "MCP_TOOL_TIMEOUT",
+    "SLASH_COMMAND_TOOL_CHAR_BUDGET",
+    "USE_BUILTIN_RIPGREP",
+
+    # Disabling Features (Flags)
+    "DISABLE_AUTOUPDATER",
+    "DISABLE_BUG_COMMAND",
+    "DISABLE_COST_WARNINGS",
+    "DISABLE_ERROR_REPORTING",
+    "DISABLE_NON_ESSENTIAL_MODEL_CALLS",
+    "DISABLE_PROMPT_CACHING",
+    "DISABLE_PROMPT_CACHING_HAIKU",
+    "DISABLE_PROMPT_CACHING_OPUS",
+    "DISABLE_PROMPT_CACHING_SONNET",
+    "DISABLE_TELEMETRY",
+    
+    # CI/CD
+    "CI"
+}
+
 # --- Pydantic Models ---
 
 class Hook(BaseModel):
@@ -37,10 +122,35 @@ class Hook(BaseModel):
     tools: Optional[List[str]] = None
     commands: List[str]
 
+class EnvSettings(BaseModel):
+    vars: Dict[str, str] = Field(default_factory=dict) # For Claude 'env' (sets variables)
+    allow: List[str] = Field(default_factory=list)     # For Gemini 'allowedEnvironmentVariables'
+    block: List[str] = Field(default_factory=list)     # For Gemini 'blockedEnvironmentVariables'
+
+    def merge_with(self, other: "EnvSettings") -> "EnvSettings":
+        merged_vars = self.vars.copy()
+        merged_vars.update(other.vars)
+        
+        merged_allow = sorted(list(set(self.allow + other.allow)))
+        merged_block = sorted(list(set(self.block + other.block)))
+        
+        return EnvSettings(vars=merged_vars, allow=merged_allow, block=merged_block)
+
+class NetworkSettings(BaseModel):
+    proxy: Optional[str] = None # For Gemini 'proxy'
+
+    def merge_with(self, other: "NetworkSettings") -> "NetworkSettings":
+        # Specific overrides common
+        return NetworkSettings(proxy=other.proxy if other.proxy is not None else self.proxy)
+
 class AgentSettings(BaseModel):
     allow: List[str] = Field(default_factory=list)
     deny: List[str] = Field(default_factory=list)
     hooks: List[Hook] = Field(default_factory=list)
+    
+    env: EnvSettings = Field(default_factory=EnvSettings)
+    network: NetworkSettings = Field(default_factory=NetworkSettings)
+    
     settings: Dict[str, Any] = Field(default_factory=dict)
 
     def merge_with(self, other: "AgentSettings") -> "AgentSettings":
@@ -50,9 +160,12 @@ class AgentSettings(BaseModel):
         merged_allow = sorted(list(set(self.allow + other.allow)))
         merged_deny = sorted(list(set(self.deny + other.deny)))
         
-        # Concatenate hooks (complex objects are harder to dedup securely, 
-        # but naively checking name might be enough. For now, just concat)
+        # Concatenate hooks
         merged_hooks = self.hooks + other.hooks
+        
+        # Merge nested settings
+        merged_env = self.env.merge_with(other.env)
+        merged_network = self.network.merge_with(other.network)
         
         # recursive dict merge for settings
         merged_settings = self._merge_dicts(self.settings, other.settings)
@@ -61,6 +174,8 @@ class AgentSettings(BaseModel):
             allow=merged_allow,
             deny=merged_deny,
             hooks=merged_hooks,
+            env=merged_env,
+            network=merged_network,
             settings=merged_settings
         )
 
@@ -167,6 +282,25 @@ def update_claude_settings(final_config: AgentSettings):
     settings["permissions"]["allow"] = sorted([c for c in allow_cmds if c])
     settings["permissions"]["deny"] = sorted([c for c in deny_cmds if c])
 
+    # Environment Variables & Network
+    env_vars = final_config.env.vars.copy()
+    
+    # Auto-inject proxy if set
+    if final_config.network.proxy:
+        if "HTTP_PROXY" not in env_vars:
+            env_vars["HTTP_PROXY"] = final_config.network.proxy
+        if "HTTPS_PROXY" not in env_vars:
+            env_vars["HTTPS_PROXY"] = final_config.network.proxy
+
+    # Validate Env Vars
+    unknown_vars = [k for k in env_vars.keys() if k not in KNOWN_CLAUDE_ENV_VARS]
+    if unknown_vars:
+        print(f"⚠️  Warning: The following environment variables are not in the known Claude list: {', '.join(unknown_vars)}")
+        print("   (They will still be applied, but ensure they are correct.)")
+
+    if env_vars:
+        settings["env"] = env_vars
+
     # Hooks
     if final_config.hooks:
         settings["hooks"] = build_hooks_config(final_config.hooks, CLAUDE_MAP)
@@ -200,6 +334,15 @@ def update_gemini_settings(final_config: AgentSettings):
 
     settings["tools"]["allowed"] = preserved_allowed + sorted(gemini_allow)
     settings["tools"]["exclude"] = preserved_exclude + sorted(gemini_deny)
+
+    # Environment Variables & Network
+    if final_config.env.allow:
+        settings["allowedEnvironmentVariables"] = final_config.env.allow
+    if final_config.env.block:
+        settings["blockedEnvironmentVariables"] = final_config.env.block
+    
+    if final_config.network.proxy:
+        settings["proxy"] = final_config.network.proxy
 
     # Hooks
     if final_config.hooks:
