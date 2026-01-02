@@ -55,12 +55,15 @@ AGENT_CONFIG_YAML = "dotfiles/agent-config.yaml"
 AGENT_CONFIG_TOML = "dotfiles/agent-config.toml"
 CLAUDE_SETTINGS = "dotfiles/claude/.claude/settings.json"
 GEMINI_SETTINGS_SRC = "dotfiles/gemini/.gemini/settings.json"
-# Kiro Settings (macOS specific path)
+
+# macOS Specific Paths
 KIRO_SETTINGS = os.path.expanduser("~/Library/Application Support/Kiro/User/settings.json")
+ANTIGRAVITY_SETTINGS = os.path.expanduser("~/Library/Application Support/Antigravity/User/settings.json")
 
 CLAUDE_SYSTEM_PATH = "~/.claude/settings.json"
 GEMINI_SYSTEM_PATH = "~/.gemini/settings.json"
 KIRO_SYSTEM_PATH = "~/Library/Application Support/Kiro/User/settings.json"
+ANTIGRAVITY_SYSTEM_PATH = "~/Library/Application Support/Antigravity/User/settings.json"
 
 CLAUDE_MAP = {
     "events": {"post-tool-use": "PostToolUse", "finish": "Stop", "pre-tool-use": "PreToolUse"},
@@ -351,13 +354,32 @@ def update_kiro_settings(final_config: AgentSettings):
         json.dump(settings, f, indent=4)
     Log.success(f"Updated Kiro Desktop config: {KIRO_SETTINGS}")
 
+def update_antigravity_settings(final_config: AgentSettings):
+    """
+    Updates Antigravity Desktop settings.
+    """
+    if not os.path.exists(ANTIGRAVITY_SETTINGS):
+        Log.debug(f"Antigravity settings not found at {ANTIGRAVITY_SETTINGS}. Skipping.")
+        return
+
+    settings = load_json(ANTIGRAVITY_SETTINGS)
+    flat_allow, _ = final_config.get_flat_lists()
+    
+    # Synapse is the Single Source of Truth for trusted commands.
+    # Assuming 'antigravityAgent.trustedCommands' follows the Kiro pattern.
+    settings["antigravityAgent.trustedCommands"] = sorted(flat_allow)
+    
+    with open(ANTIGRAVITY_SETTINGS, "w") as f:
+        json.dump(settings, f, indent=4)
+    Log.success(f"Updated Antigravity Desktop config: {ANTIGRAVITY_SETTINGS}")
+
 @app.command()
 def main(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable verbose debug logging.")
 ):
     """
     Synapse: A configuration synchronizer for AI Agents.
-    Reads from agent-config.yaml/toml and updates Claude, Gemini, and Kiro settings.
+    Reads from agent-config.yaml/toml and updates Claude, Gemini, Kiro, and Antigravity settings.
     """
     Log.VERBOSE = verbose
     
@@ -388,6 +410,7 @@ def main(
     update_claude_settings(claude_config)
     update_gemini_settings(gemini_config)
     update_kiro_settings(claude_config) # Using Claude's effective config for Kiro
+    update_antigravity_settings(claude_config) # Using Claude's effective config for Antigravity
     
     # Summary Table
     table = Table(title="Sync Status", show_header=True, header_style="bold cyan")
@@ -399,6 +422,8 @@ def main(
     table.add_row("Gemini", "Updated", GEMINI_SYSTEM_PATH)
     if os.path.exists(KIRO_SETTINGS):
         table.add_row("Kiro", "Updated", KIRO_SYSTEM_PATH)
+    if os.path.exists(ANTIGRAVITY_SETTINGS):
+        table.add_row("Antigravity", "Updated", ANTIGRAVITY_SYSTEM_PATH)
     
     console.print("\n", table)
     console.print("\n[bold green]🎉 Sync Complete![/bold green]")
