@@ -135,11 +135,36 @@ class NetworkSettings(BaseModel):
 class CommandGroup(BaseModel):
     allow: List[str] = Field(default_factory=list)
     deny: List[str] = Field(default_factory=list)
+    commands: Dict[str, "CommandGroup"] = Field(default_factory=dict)
 
     def merge_with(self, other: "CommandGroup") -> "CommandGroup":
         merged_allow = sorted(list(set(self.allow + other.allow)))
         merged_deny = sorted(list(set(self.deny + other.deny)))
-        return CommandGroup(allow=merged_allow, deny=merged_deny)
+        
+        merged_commands = self.commands.copy()
+        for tool, group in other.commands.items():
+            if tool in merged_commands:
+                merged_commands[tool] = merged_commands[tool].merge_with(group)
+            else:
+                merged_commands[tool] = group
+                
+        return CommandGroup(allow=merged_allow, deny=merged_deny, commands=merged_commands)
+
+    def get_flat_lists(self, prefix: str) -> (List[str], List[str]):
+        flat_allow = []
+        flat_deny = []
+        
+        for cmd in self.allow:
+            flat_allow.append(f"{prefix} *" if cmd == "*" else f"{prefix} {cmd}")
+        for cmd in self.deny:
+            flat_deny.append(f"{prefix} *" if cmd == "*" else f"{prefix} {cmd}")
+            
+        for tool, group in self.commands.items():
+            sub_allow, sub_deny = group.get_flat_lists(f"{prefix} {tool}")
+            flat_allow.extend(sub_allow)
+            flat_deny.extend(sub_deny)
+            
+        return flat_allow, flat_deny
 
 class AgentSettings(BaseModel):
     allow: List[str] = Field(default_factory=list)
@@ -181,10 +206,9 @@ class AgentSettings(BaseModel):
         final_deny = set(self.deny)
 
         for tool, group in self.commands.items():
-            for cmd in group.allow:
-                final_allow.add(f"{tool} *" if cmd == "*" else f"{tool} {cmd}")
-            for cmd in group.deny:
-                final_deny.add(f"{tool} *" if cmd == "*" else f"{tool} {cmd}")
+            g_allow, g_deny = group.get_flat_lists(tool)
+            final_allow.update(g_allow)
+            final_deny.update(g_deny)
         
         return sorted(list(final_allow)), sorted(list(final_deny))
 
