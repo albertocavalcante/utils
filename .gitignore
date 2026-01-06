@@ -3,3 +3,4 @@
 
 # BFG Repo-Cleaner reports
 *.bfg-report/
+.backup_cleanup/
